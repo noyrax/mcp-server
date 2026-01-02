@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "noyrax": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@noyrax/mcp-server@1.0.4-beta.11",
+        "${workspaceFolder}"
+      ]
+    }
+  }
+}

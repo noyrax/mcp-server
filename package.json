@@ -1,0 +1,66 @@
+{
+  "name": "@noyrax/mcp-server",
+  "version": "1.0.4-beta.16",
+  "description": "Unified MCP Server for Noyrax Workspace - Orchestrates 5D Database Plugin and Documentation System Plugin. Provides Model Context Protocol (MCP) access for AI agents (Cursor, VS Code, Claude Desktop).",
+  "type": "module",
+  "main": "./out/server.js",
+  "bin": {
+    "noyrax-mcp-server": "out/cli/server-cli.js"
+  },
+  "files": [
+    "out/",
+    "README.md",
+    "INSTALLATION_GUIDE.md",
+    "QUICK_START.md",
+    "TOOLS.md",
+    "package.json"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/noyrax/noyrax.git",
+    "directory": "mcp-server"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "start": "node out/cli/server-cli.js",
+    "build": "npm run compile",
+    "prepublishOnly": "npm run compile",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "mcp:start": "node out/cli/server-cli.js ."
+  },
+  "keywords": [
+    "noyrax",
+    "mcp",
+    "model-context-protocol",
+    "ai-agent",
+    "cursor",
+    "copilot",
+    "documentation",
+    "database"
+  ],
+  "author": "Benjamin Behrens <contact@noyrax.dev>",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.1",
+    "@noyrax/5d-database-plugin": "^0.1.14-beta.4",
+    "@noyrax/documentation-system-plugin": "^1.0.4-beta.2",
+    "zod": "^4.2.1",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/node": "16.x",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.4.6",
+    "typescript": "^5.1.6"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
+
