@@ -1,0 +1,12 @@
+{
+  "mcp.servers": {
+    "noyrax": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/mcp-server/out/cli/server-cli.js",
+        "${workspaceFolder}"
+      ]
+    }
+  }
+}
+

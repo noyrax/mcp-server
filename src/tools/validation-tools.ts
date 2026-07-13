@@ -56,39 +56,38 @@ export class ValidationTools {
 
     /**
      * Runs drift check.
+     * Note: This is now a local function and doesn't require the plugin to be available.
      */
     public async runDriftCheck(args: {
         since?: string;
     } = {}): Promise<any> {
-        if (!this.adapter.isAvailable()) {
-            throw new Error('Documentation System Plugin is not available');
-        }
-
+        // No longer requires plugin availability - uses local function
         return await this.adapter.runDriftCheck(args);
     }
 
     /**
      * Analyzes impact.
+     * Note: This is now a local function and doesn't require the plugin to be available.
      */
     public async analyzeImpact(args: {
         file: string;
         symbol?: string;
     }): Promise<any> {
-        if (!this.adapter.isAvailable()) {
-            throw new Error('Documentation System Plugin is not available');
-        }
-
+        // No longer requires plugin availability - uses local function
         return await this.adapter.analyzeImpact(args);
     }
 
     /**
      * Verifies ADRs.
+     * Note: This uses the verify-adrs.js script, but should work even if plugin is not fully available.
      */
     public async verifyAdrs(args: {
         verbose?: boolean;
     } = {}): Promise<any> {
-        if (!this.adapter.isAvailable()) {
-            throw new Error('Documentation System Plugin is not available');
+        // verifyAdrs uses the script, which should be available if plugin path exists
+        // Even if plugin is not fully compiled, the script might still work
+        if (!this.adapter.getPluginPath()) {
+            throw new Error('Documentation System Plugin path not found');
         }
 
         return await this.adapter.verifyAdrs(args);

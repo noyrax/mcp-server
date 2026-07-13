@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 
 /**
  * Resolves workspace root from various sources:
@@ -132,10 +133,12 @@ export class WorkspaceResolver {
     public static findPluginPaths(workspaceRoot: string): {
         databasePlugin?: string;
         documentationPlugin?: string;
+        agentPlugin?: string;
     } {
         const result: {
             databasePlugin?: string;
             documentationPlugin?: string;
+            agentPlugin?: string;
         } = {};
 
         // Check for 5d-database-plugin
@@ -150,7 +153,114 @@ export class WorkspaceResolver {
             result.documentationPlugin = docPluginPath;
         }
 
+        // Check for agent-5d-system
+        const agentPluginPath = path.join(workspaceRoot, 'agent-5d-system');
+        if (fs.existsSync(agentPluginPath)) {
+            result.agentPlugin = agentPluginPath;
+        }
+
         return result;
+    }
+
+    /**
+     * Normalizes a path for plugin ID computation (lowercase on Windows).
+     * Used for deterministic plugin ID generation.
+     * 
+     * @param filePath Path to normalize
+     * @returns Normalized path (POSIX-style, lowercase on Windows)
+     */
+    public static normalizeForPluginId(filePath: string): string {
+        // Resolve to absolute path
+        const resolved = path.resolve(filePath);
+        
+        // Convert to POSIX-style (forward slashes)
+        const posix = resolved.replace(/\\/g, '/');
+        
+        // On Windows, normalize case (to lowercase for case-insensitive comparison)
+        // On Unix, preserve case
+        if (process.platform === 'win32') {
+            return posix.toLowerCase();
+        }
+        
+        return posix;
+    }
+
+    /**
+     * Normalizes a file path (case-preserving).
+     * Used for file path storage and entity ID computation.
+     * 
+     * @param filePath Path to normalize
+     * @returns Normalized path (POSIX-style, case-preserved)
+     */
+    public static normalizeFilePath(filePath: string): string {
+        // Resolve to absolute path
+        const resolved = path.resolve(filePath);
+        
+        // Convert to POSIX-style (forward slashes)
+        // Case is preserved - NO toLowerCase()
+        return resolved.replace(/\\/g, '/');
+    }
+
+    /**
+     * Computes canonical plugin ID from workspace root.
+     * Uses SHA256 hash of normalized workspace root path.
+     * 
+     * @param workspaceRoot Workspace root path
+     * @returns Plugin ID (16 hex characters)
+     */
+    public static computePluginId(workspaceRoot: string): string {
+        const normalized = this.normalizeForPluginId(workspaceRoot);
+        const hash = crypto.createHash('sha256').update(normalized).digest('hex');
+        return hash.substring(0, 16);
+    }
+
+    /**
+     * Computes canonical workspace ID from workspace root.
+     * Uses SHA256 hash of normalized workspace root path.
+     * 
+     * @param workspaceRoot Workspace root path
+     * @returns Workspace ID (16 hex characters)
+     */
+    public static computeWorkspaceId(workspaceRoot: string): string {
+        // For now, workspace ID is the same as plugin ID
+        // In the future, this could be different (e.g., for multi-workspace scenarios)
+        return this.computePluginId(workspaceRoot);
+    }
+
+    /**
+     * Computes entity ID hash for a given entity.
+     * Used for cross-system stable entity references.
+     * 
+     * @param entityType Type of entity (e.g., 'module', 'symbol', 'adr')
+     * @param entityPath Path or identifier of the entity
+     * @returns Entity ID hash (16 hex characters)
+     */
+    public static computeEntityId(entityType: string, entityPath: string): string {
+        const normalizedPath = this.normalizeFilePath(entityPath);
+        const combined = `${entityType}:${normalizedPath}`;
+        const hash = crypto.createHash('sha256').update(combined).digest('hex');
+        return hash.substring(0, 16);
+    }
+
+    /**
+     * Maps entity ID from one workspace to another.
+     * Used for snapshot portability across different workspace roots.
+     * 
+     * @param entityId Original entity ID
+     * @param sourceWorkspaceRoot Source workspace root
+     * @param targetWorkspaceRoot Target workspace root
+     * @returns Mapped entity ID (if mapping is possible)
+     */
+    public static mapEntityId(
+        entityId: string,
+        sourceWorkspaceRoot: string,
+        targetWorkspaceRoot: string
+    ): string | null {
+        // For now, entity IDs are workspace-relative
+        // In a full implementation, this would use entity_id_mapping rules from the contract
+        // For snapshot portability, we'd need to store the mapping in the snapshot
+        // This is a placeholder for future implementation
+        return entityId; // Return same ID if mapping not needed/possible
     }
 }
 

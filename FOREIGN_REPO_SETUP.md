@@ -1,5 +1,29 @@
 # Fremd-Repo Setup - Noyrax MCP Server
 
+## Quick Start (Empfohlen)
+
+**Ein Befehl - Alles automatisch:**
+
+**Windows (PowerShell):**
+```powershell
+.\scripts\setup-foreign.ps1
+# Oder
+npm run setup:foreign:ps1
+```
+
+**Linux/macOS (Bash):**
+```bash
+./scripts/setup-foreign.sh
+# Oder
+npm run setup:foreign:sh
+```
+
+Das Script führt automatisch aus:
+- ✅ Installiert alle benötigten npm Packages
+- ✅ Erkennt automatisch installierte IDEs (Cursor, VS Code, Claude Desktop)
+- ✅ Erstellt Konfigurationsdateien für alle erkannten IDEs
+- ✅ Verifiziert Installation
+
 ## Problem
 
 Der MCP-Server zeigt Tools/Resources in der UI, aber beim Aufruf von Tools (z.B. `workflow/check_status`) meldet Cursor: **"Found 0 tools, 0 prompts, and 0 resources"**.
@@ -8,27 +32,29 @@ Der MCP-Server zeigt Tools/Resources in der UI, aber beim Aufruf von Tools (z.B.
 1. `@noyrax/5d-database-plugin` - für Database Tools
 2. `@noyrax/documentation-system-plugin` - für Validation Tools
 
-## Lösung
+## Lösung (Automatisiert)
 
-### Schritt 1: Plugins installieren
+### Schritt 1: Setup-Script ausführen
 
-Im Fremd-Repo (z.B. `D:\ai-agent-system`):
-
+**Windows:**
 ```powershell
-npm i -D @noyrax/mcp-server@1.0.4-beta.9
-npm i -D @noyrax/5d-database-plugin@0.1.14-beta.1
-npm i -D @noyrax/documentation-system-plugin@1.0.4-beta.2
+.\scripts\setup-foreign.ps1
 ```
 
-**Wichtig:** Alle drei Pakete müssen installiert sein:
-- `@noyrax/mcp-server` - der Unified Server
-- `@noyrax/5d-database-plugin` - für Database Tools
-- `@noyrax/documentation-system-plugin` - für Validation Tools
+**Linux/macOS:**
+```bash
+./scripts/setup-foreign.sh
+```
 
-### Schritt 2: Cursor neu starten
+Das Script installiert automatisch:
+- `@noyrax/mcp-server@1.0.4-beta.19` - der Unified Server
+- `@noyrax/5d-database-plugin@0.1.14-beta.8` - für Database Tools
+- `@noyrax/documentation-system-plugin@1.0.4-beta.2` - für Validation Tools
 
-1. Cursor **komplett schließen**
-2. Cursor **neu öffnen**
+### Schritt 2: IDE neu starten
+
+1. Cursor/VS Code/Claude Desktop **komplett schließen**
+2. Cursor/VS Code/Claude Desktop **neu öffnen**
 3. Prüfen: `View → MCP Servers` → `noyrax` sollte jetzt Tools/Resources zeigen
 
 ### Schritt 3: Verifikation
@@ -40,6 +66,71 @@ System-Status prüfen
 ```
 
 → Sollte `workflow/check_status` automatisch nutzen und einen Status-Report zurückgeben.
+
+## Lösung (Manuell)
+
+Falls das automatische Script nicht funktioniert:
+
+### Schritt 1: Plugins installieren
+
+Im Fremd-Repo (z.B. `D:\ai-agent-system`):
+
+```powershell
+npm i -D @noyrax/mcp-server@latest @noyrax/5d-database-plugin@0.1.14-beta.8 @noyrax/documentation-system-plugin@1.0.4-beta.2
+```
+
+**Hinweis:** `@noyrax/mcp-server@latest` verwendet Version `1.0.4-beta.20`, die korrekte Dependencies hat (keine `file:` Dependencies mehr).
+
+**Wichtig:** Alle drei Pakete müssen installiert sein:
+- `@noyrax/mcp-server` - der Unified Server
+- `@noyrax/5d-database-plugin` - für Database Tools
+- `@noyrax/documentation-system-plugin` - für Validation Tools
+
+### Schritt 2: IDE konfigurieren
+
+**Cursor:** Erstellen Sie `.cursor/mcp-config.json`:
+```json
+{
+  "mcpServers": {
+    "noyrax": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/node_modules/@noyrax/mcp-server/out/cli/server-cli.js",
+        "${workspaceFolder}"
+      ],
+      "env": {
+        "NODE_ENV": "production"
+      }
+    }
+  }
+}
+```
+
+**VS Code:** Erstellen/aktualisieren Sie `.vscode/settings.json`:
+```json
+{
+  "mcp.servers": {
+    "noyrax": {
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/node_modules/@noyrax/mcp-server/out/cli/server-cli.js",
+        "${workspaceFolder}"
+      ],
+      "env": {
+        "NODE_ENV": "production"
+      }
+    }
+  }
+}
+```
+
+**Claude Desktop:** Siehe `INSTALLATION_FOR_AI_AGENTS.md` für Details.
+
+### Schritt 3: IDE neu starten
+
+1. Cursor/VS Code/Claude Desktop **komplett schließen**
+2. Cursor/VS Code/Claude Desktop **neu öffnen**
+3. Prüfen: `View → MCP Servers` → `noyrax` sollte jetzt Tools/Resources zeigen
 
 ## Warum funktioniert es jetzt?
 
@@ -74,6 +165,10 @@ Damit findet der Server die Plugins, auch wenn sie nur im Workspace-Root install
 - Falls nicht: `workflow/ensure_ready` ausführen (falls verfügbar)
 - Oder: `workflow/onboard` ausführen (generiert `docs/` automatisch)
 
+### Problem: Script findet IDEs nicht
+
+**Lösung:** Konfigurieren Sie manuell - siehe oben "Lösung (Manuell)"
+
 ## Nächste Schritte
 
 Nach erfolgreicher Installation:
@@ -84,9 +179,26 @@ Nach erfolgreicher Installation:
 
 ## Vollständige Installation (One-Liner)
 
+**Automatisiert (Empfohlen):**
 ```powershell
-npm i -D @noyrax/mcp-server@1.0.4-beta.9 @noyrax/5d-database-plugin@0.1.14-beta.1 @noyrax/documentation-system-plugin@1.0.4-beta.2
+# Windows
+.\scripts\setup-foreign.ps1
+
+# Linux/macOS
+./scripts/setup-foreign.sh
 ```
 
-Dann Cursor neu starten.
+**Manuell:**
+```powershell
+npm i -D @noyrax/mcp-server@latest @noyrax/5d-database-plugin@0.1.14-beta.8 @noyrax/documentation-system-plugin@1.0.4-beta.2
+```
 
+**Hinweis:** `@noyrax/mcp-server@latest` verwendet Version `1.0.4-beta.20`, die korrekte Dependencies hat.
+
+Dann IDE neu starten.
+
+## Weitere Informationen
+
+- `FREMDSYSTEM_INSTALLATION_FINAL.md` - Vereinfachte Installationsanleitung
+- `INSTALLATION_FOR_AI_AGENTS.md` - Vollständige Installationsanleitung für AI-Agenten
+- `INSTALLATION_GUIDE.md` - Detaillierte MCP Server Installationsanleitung

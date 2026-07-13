@@ -1,5 +1,6 @@
 import { DatabaseTools } from './database-tools.js';
 import { ValidationTools } from './validation-tools.js';
+import { SystemContractGenerator } from './system-contract-generator.js';
 import { WorkspaceResolver } from '../workspace-resolver.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -31,6 +32,7 @@ export class OrchestrationTools {
         const aliasValues = new Set([
             '',
             '.',
+            'default',  // ✅ Fix: Add "default" explicitly
             'documentation-system-plugin',
             '@noyrax/documentation-system-plugin',
             '5d-database-plugin',
@@ -86,10 +88,25 @@ export class OrchestrationTools {
                 steps[steps.length - 1] = { step: 'ingest', status: 'failed', error: error.message || String(error) };
             }
 
-            // Step 5: Embeddings (would need to call embedding CLI)
+            // Step 5: Embeddings (generated during ingestion via IngestionOrchestrator)
             steps.push({ step: 'embeddings', status: 'running' });
             const embeddingStatus = await this.checkEmbeddingStatus();
-            steps[steps.length - 1] = { step: 'embeddings', status: embeddingStatus.needed ? 'pending' : 'skipped', message: embeddingStatus.message };
+            // Embeddings are generated during ingestion (IngestionOrchestrator calls embeddingPipeline.syncEmbeddings)
+            // So if ingestion succeeded, embeddings should be available
+            const embeddingsGenerated = steps.find(s => s.step === 'ingest')?.status === 'completed';
+            if (embeddingsGenerated) {
+                steps[steps.length - 1] = { 
+                    step: 'embeddings', 
+                    status: 'completed', 
+                    message: 'Embeddings generated during ingestion (using EMBEDDING_STRATEGY from environment)' 
+                };
+            } else {
+                steps[steps.length - 1] = { 
+                    step: 'embeddings', 
+                    status: embeddingStatus.needed ? 'pending' : 'skipped', 
+                    message: embeddingStatus.message 
+                };
+            }
 
             return {
                 status: 'completed',
@@ -668,6 +685,9 @@ export class OrchestrationTools {
         semanticLimit?: number;
         gapMinDependencies?: number;
         gapLimit?: number;
+        summaryOnly?: boolean; // If true, returns only summary without full details
+        excludeMarkdown?: boolean; // If true, excludes reportMarkdown
+        excludeSteps?: boolean; // If true, excludes detailed steps
     }): Promise<any> {
         const steps: any[] = [];
         const errors: string[] = [];
@@ -677,6 +697,9 @@ export class OrchestrationTools {
         const semanticLimit = typeof args.semanticLimit === 'number' ? args.semanticLimit : 5;
         const gapMinDependencies = typeof args.gapMinDependencies === 'number' ? args.gapMinDependencies : 5;
         const gapLimit = typeof args.gapLimit === 'number' ? args.gapLimit : 20;
+        const summaryOnly = args.summaryOnly === true; // default false
+        const excludeMarkdown = args.excludeMarkdown === true; // default false
+        const excludeSteps = args.excludeSteps === true; // default false
 
         const semanticQueriesRaw = Array.isArray(args.semanticQueries) ? args.semanticQueries : [
             'main entry point',
@@ -730,7 +753,7 @@ export class OrchestrationTools {
         steps.push({ step: 'system_explanation', status: 'running' });
         try {
             const explanationRaw = await this.databaseTools.systemExplanation(pluginId);
-            systemExplanationParsed = JSON.parse(explanationRaw);
+            systemExplanationParsed = explanationRaw;
             steps[steps.length - 1] = { step: 'system_explanation', status: 'completed', result: systemExplanationParsed };
         } catch (error: any) {
             const msg = error?.message || String(error);
@@ -773,7 +796,8 @@ export class OrchestrationTools {
                 limit: gapLimit,
                 autoGenerateAdrs: false
             });
-            gapAnalysisParsed = JSON.parse(gapRaw);
+            // gapRaw ist bereits ein Objekt, nicht parsen
+            gapAnalysisParsed = gapRaw;
             // Determinism: remove runtime timestamps
             if (gapAnalysisParsed?.summary?.analysis_date) {
                 delete gapAnalysisParsed.summary.analysis_date;
@@ -797,7 +821,8 @@ export class OrchestrationTools {
             steps.push({ step: 'semantic_discovery', status: 'running', query, limit: semanticLimit });
             try {
                 const discoveryRaw = await this.databaseTools.semanticDiscovery({ query, pluginId, limit: semanticLimit });
-                const parsed = JSON.parse(discoveryRaw);
+                // discoveryRaw ist bereits ein Objekt, nicht parsen
+                const parsed = discoveryRaw;
                 const topExternalIds = Array.isArray(parsed?.results)
                     ? parsed.results
                         .map((r: any) => String(r?.externalId || '').trim())
@@ -855,111 +880,128 @@ export class OrchestrationTools {
                 description: 'Get combined ADR + symbol context for this file.'
             }));
 
-        // Build reportMarkdown (deterministic, no timestamps)
-        const lines: string[] = [];
-        lines.push('# Onboarding Report');
-        lines.push('');
-        lines.push('## Readiness');
-        lines.push(`- Summary: ${status?.summary ?? 'unknown'}`);
-        lines.push(`- ReadyForOnboarding: ${ready ? 'yes' : 'no'}`);
-        if (Array.isArray(status?.blockingIssues) && status.blockingIssues.length > 0) {
-            lines.push('- Issues:');
-            for (const issue of status.blockingIssues) {
-                const code = String(issue?.code || '').trim();
-                const sev = String(issue?.severity || '').trim();
-                const msg = String(issue?.message || '').trim();
-                if (code && sev && msg) {
-                    lines.push(`  - ${code} (${sev}): ${msg}`);
+        // Build reportMarkdown (deterministic, no timestamps) - only if not excluded
+        let reportMarkdown: string | undefined;
+        if (!excludeMarkdown) {
+            const lines: string[] = [];
+            lines.push('# Onboarding Report');
+            lines.push('');
+            lines.push('## Readiness');
+            lines.push(`- Summary: ${status?.summary ?? 'unknown'}`);
+            lines.push(`- ReadyForOnboarding: ${ready ? 'yes' : 'no'}`);
+            if (Array.isArray(status?.blockingIssues) && status.blockingIssues.length > 0) {
+                lines.push('- Issues:');
+                for (const issue of status.blockingIssues) {
+                    const code = String(issue?.code || '').trim();
+                    const sev = String(issue?.severity || '').trim();
+                    const msg = String(issue?.message || '').trim();
+                    if (code && sev && msg) {
+                        lines.push(`  - ${code} (${sev}): ${msg}`);
+                    }
                 }
             }
-        }
-        lines.push('');
+            lines.push('');
 
-        lines.push('## Systemkarte');
-        const dims = Array.isArray(systemExplanationParsed?.dimensions) ? systemExplanationParsed.dimensions : [];
-        if (dims.length > 0) {
-            lines.push('- Dimensionen (Counts):');
-            for (const d of dims) {
-                const id = String(d?.id || '').trim();
-                const name = String(d?.name || '').trim();
-                const count = typeof d?.entity_count === 'number' ? d.entity_count : undefined;
-                if (id && name) {
-                    lines.push(`  - ${id}: ${name}${typeof count === 'number' ? ` (${count})` : ''}`);
+            lines.push('## Systemkarte');
+            const dims = Array.isArray(systemExplanationParsed?.dimensions) ? systemExplanationParsed.dimensions : [];
+            if (dims.length > 0) {
+                lines.push('- Dimensionen (Counts):');
+                for (const d of dims) {
+                    const id = String(d?.id || '').trim();
+                    const name = String(d?.name || '').trim();
+                    const count = typeof d?.entity_count === 'number' ? d.entity_count : undefined;
+                    if (id && name) {
+                        lines.push(`  - ${id}: ${name}${typeof count === 'number' ? ` (${count})` : ''}`);
+                    }
                 }
             }
-        }
 
-        const archAdrs = Array.isArray(systemExplanationParsed?.architecture_adrs)
-            ? systemExplanationParsed.architecture_adrs
-            : [];
-        if (archAdrs.length > 0) {
-            lines.push('- Architektur-ADRs:');
-            for (const adr of archAdrs.slice(0, 10)) {
-                const num = String(adr?.adr_number || '').trim();
-                const title = String(adr?.title || '').trim();
-                if (num && title) {
-                    lines.push(`  - ${num}: ${title}`);
+            const archAdrs = Array.isArray(systemExplanationParsed?.architecture_adrs)
+                ? systemExplanationParsed.architecture_adrs
+                : [];
+            if (archAdrs.length > 0) {
+                lines.push('- Architektur-ADRs:');
+                for (const adr of archAdrs.slice(0, 10)) {
+                    const num = String(adr?.adr_number || '').trim();
+                    const title = String(adr?.title || '').trim();
+                    if (num && title) {
+                        lines.push(`  - ${num}: ${title}`);
+                    }
                 }
             }
-        }
 
-        if (entryPoints.length > 0) {
-            lines.push('- Entry Points:');
-            for (const p of uniqueSorted(entryPoints).slice(0, 10)) {
-                lines.push(`  - ${p}`);
-            }
-        }
-        lines.push('');
-
-        lines.push('## Hotspots (Doku-Gaps)');
-        if (gapsWithoutAdrs.length > 0) {
-            for (const gap of gapsWithoutAdrs.slice(0, 10)) {
-                const p = String(gap?.module?.file_path || '').trim();
-                const deps = typeof gap?.dependency_count === 'number' ? gap.dependency_count : undefined;
-                const score = typeof gap?.gap_score === 'number' ? gap.gap_score : undefined;
-                if (p) {
-                    lines.push(`- ${p}${typeof deps === 'number' ? ` (deps: ${deps})` : ''}${typeof score === 'number' ? ` (gap: ${score})` : ''}`);
+            if (entryPoints.length > 0) {
+                lines.push('- Entry Points:');
+                for (const p of uniqueSorted(entryPoints).slice(0, 10)) {
+                    lines.push(`  - ${p}`);
                 }
             }
-        } else {
-            lines.push('- (keine Daten oder keine Gaps gefunden)');
-        }
-        lines.push('');
+            lines.push('');
 
-        lines.push('## Änderungen (letzter Report)');
-        if (changeSummary === null) {
-            lines.push('- (kein Change-Report gefunden)');
-        } else if (changeSummary) {
-            const keys = ['run_type', 'parsed_files', 'skipped_files', 'total_dependencies', 'validation_errors', 'validation_warnings'] as const;
-            for (const k of keys) {
-                if (typeof changeSummary[k] !== 'undefined') {
-                    lines.push(`- ${k}: ${changeSummary[k]}`);
+            lines.push('## Hotspots (Doku-Gaps)');
+            if (gapsWithoutAdrs.length > 0) {
+                for (const gap of gapsWithoutAdrs.slice(0, 10)) {
+                    const p = String(gap?.module?.file_path || '').trim();
+                    const deps = typeof gap?.dependency_count === 'number' ? gap.dependency_count : undefined;
+                    const score = typeof gap?.gap_score === 'number' ? gap.gap_score : undefined;
+                    if (p) {
+                        lines.push(`- ${p}${typeof deps === 'number' ? ` (deps: ${deps})` : ''}${typeof score === 'number' ? ` (gap: ${score})` : ''}`);
+                    }
+                }
+            } else {
+                lines.push('- (keine Daten oder keine Gaps gefunden)');
+            }
+            lines.push('');
+
+            lines.push('## Änderungen (letzter Report)');
+            if (changeSummary === null) {
+                lines.push('- (kein Change-Report gefunden)');
+            } else if (changeSummary) {
+                const keys = ['run_type', 'parsed_files', 'skipped_files', 'total_dependencies', 'validation_errors', 'validation_warnings'] as const;
+                for (const k of keys) {
+                    if (typeof changeSummary[k] !== 'undefined') {
+                        lines.push(`- ${k}: ${changeSummary[k]}`);
+                    }
+                }
+            } else {
+                lines.push('- (nicht verfügbar)');
+            }
+            lines.push('');
+
+            lines.push('## Next Steps (Tools)');
+            for (const step of (status?.nextSteps ?? [])) {
+                const name = String(step?.name || '').trim();
+                const desc = String(step?.description || '').trim();
+                if (name && desc) {
+                    lines.push(`- ${name}: ${desc}`);
                 }
             }
-        } else {
-            lines.push('- (nicht verfügbar)');
-        }
-        lines.push('');
+            lines.push('');
 
-        lines.push('## Next Steps (Tools)');
-        for (const step of (status?.nextSteps ?? [])) {
-            const name = String(step?.name || '').trim();
-            const desc = String(step?.description || '').trim();
-            if (name && desc) {
-                lines.push(`- ${name}: ${desc}`);
+            lines.push('## Empfohlene Kontext-Abfragen');
+            for (const q of recommendedNextQueries) {
+                lines.push(`- cross_analysis: ${q.arguments.filePath}`);
             }
+            lines.push('');
+
+            reportMarkdown = lines.join('\n');
         }
-        lines.push('');
 
-        lines.push('## Empfohlene Kontext-Abfragen');
-        for (const q of recommendedNextQueries) {
-            lines.push(`- cross_analysis: ${q.arguments.filePath}`);
-        }
-        lines.push('');
+        // Build compact summary if requested
+        const summary = summaryOnly ? {
+            ready,
+            statusSummary: status?.summary ?? null,
+            blockingIssuesCount: Array.isArray(status?.blockingIssues) ? status.blockingIssues.length : 0,
+            dimensionsCount: Array.isArray(systemExplanationParsed?.dimensions) ? systemExplanationParsed.dimensions.length : 0,
+            architectureAdrsCount: Array.isArray(systemExplanationParsed?.architecture_adrs) ? systemExplanationParsed.architecture_adrs.length : 0,
+            entryPointsCount: Array.isArray(systemExplanationParsed?.entry_points) ? systemExplanationParsed.entry_points.length : 0,
+            gapAnalysisCount: Array.isArray(gapAnalysisParsed?.gaps?.without_adrs) ? gapAnalysisParsed.gaps.without_adrs.length : 0,
+            semanticDiscoveryCount: semanticDiscoveryResults.length,
+            recommendedNextQueriesCount: recommendedNextQueries.length
+        } : undefined;
 
-        const reportMarkdown = lines.join('\n');
-
-        const reportJson = {
+        // Build full reportJson only if not summaryOnly
+        const reportJson = summaryOnly ? undefined : {
             ready,
             statusSummary: status?.summary ?? null,
             blockingIssues: status?.blockingIssues ?? [],
@@ -975,12 +1017,130 @@ export class OrchestrationTools {
         return {
             status: errors.length > 0 ? 'completed_with_errors' : 'completed',
             ready,
-            reportMarkdown,
-            reportJson,
-            recommendedNextQueries,
-            steps,
+            ...(excludeMarkdown ? {} : { reportMarkdown }),
+            ...(summaryOnly ? { summary } : { reportJson }),
+            recommendedNextQueries: summaryOnly ? recommendedNextQueries.slice(0, 5) : recommendedNextQueries, // Limit if summary
+            ...(excludeSteps ? {} : { steps }),
             errors: errors.length > 0 ? errors : undefined,
-            ensureReady: ensureReady ? ensureReadyResult : undefined
+            ensureReady: ensureReady && !summaryOnly ? ensureReadyResult : undefined
+        };
+    }
+
+    /**
+     * Generate onboarding report (refs-first).
+     * 
+     * @param args Arguments (pluginId, mode, reportType)
+     * @returns Onboarding report (refs-first)
+     */
+    public async onboardingReport(args: {
+        pluginId?: string;
+        mode?: 'refs' | 'full';
+        reportType?: 'summary' | 'full';
+    }): Promise<any> {
+        const resolvedPluginId = this.resolvePluginId(args.pluginId);
+        const mode = args.mode || 'refs';
+        const reportType = args.reportType || 'summary';
+        
+        // Generate report using onboard (as projection)
+        const onboardResult = await this.onboard({
+            pluginId: resolvedPluginId,
+            ensureReady: false, // Don't ensure ready for refs mode
+            summaryOnly: reportType === 'summary',
+            excludeMarkdown: mode === 'refs', // Exclude markdown in refs mode
+            excludeSteps: mode === 'refs' // Exclude steps in refs mode
+        });
+        
+        // Compute artifact ID and checksum
+        const reportJson = JSON.stringify(onboardResult);
+        const checksum = crypto.createHash('sha256').update(reportJson).digest('hex').substring(0, 16);
+        const artifactId = crypto.createHash('sha256')
+            .update(`${resolvedPluginId}:onboarding_report:${reportType}:${checksum}`)
+            .digest('hex')
+            .substring(0, 16);
+        
+        // Create evidence sources (compatible with EvidenceSource interface)
+        const evidenceSources: Array<{
+            type: 'ADR' | 'MODULE' | 'SYMBOL' | 'DEPENDENCY' | 'DB_QUERY' | 'STATUS_CHECK' | 'CONTRACT';
+            id?: string;
+            path?: string;
+            hash?: string;
+            metadata?: Record<string, any>;
+        }> = [
+            {
+                type: 'STATUS_CHECK',
+                hash: checksum
+            }
+        ];
+        
+        // Add dimension sources if systemExplanation is available - use DB_QUERY for dimensions
+        if (onboardResult.reportJson?.systemExplanation) {
+            const dims = onboardResult.reportJson.systemExplanation.dimensions || [];
+            for (const dim of dims) {
+                evidenceSources.push({
+                    type: 'DB_QUERY',
+                    id: dim.id,
+                    metadata: { dimension: dim.id }
+                });
+            }
+        }
+        
+        // Create evidence (INFERRED from multiple sources)
+        const evidence = {
+            grade: 'INFERRED' as const,
+            sources: evidenceSources,
+            description: 'Onboarding report derived from system status, system explanation, gap analysis, and semantic discovery'
+        };
+        
+        // Default: refs mode - return only reference
+        if (mode === 'refs') {
+            // Build preview
+            const preview = {
+                ready: onboardResult.ready,
+                status_summary: onboardResult.summary?.statusSummary || onboardResult.reportJson?.statusSummary || null,
+                blocking_issues_count: onboardResult.summary?.blockingIssuesCount || onboardResult.reportJson?.blockingIssues?.length || 0,
+                dimensions_count: onboardResult.summary?.dimensionsCount || onboardResult.reportJson?.systemExplanation?.dimensions?.length || 0,
+                recommended_queries_count: onboardResult.summary?.recommendedNextQueriesCount || onboardResult.recommendedNextQueries?.length || 0
+            };
+            
+            return {
+                artifact_id: artifactId,
+                artifact_type: 'onboarding_report',
+                report_type: reportType,
+                generated_at: new Date().toISOString(),
+                checksum,
+                evidence,
+                preview
+            };
+        }
+        
+        // Full mode: return complete report (gated, kein Markdown standardmäßig)
+        if (mode === 'full') {
+            // Enforce max size (approximate)
+            const reportSize = reportJson.length;
+            const maxSize = 2000000; // 2MB limit
+            if (reportSize > maxSize) {
+                throw new Error(`Report size (${reportSize} bytes) exceeds maximum (${maxSize} bytes). Use reportType="summary" for smaller output.`);
+            }
+            
+            return {
+                artifact_id: artifactId,
+                artifact_type: 'onboarding_report',
+                report_type: reportType,
+                generated_at: new Date().toISOString(),
+                checksum,
+                evidence,
+                report: onboardResult.reportJson || onboardResult.summary,
+                recommendedNextQueries: onboardResult.recommendedNextQueries
+            };
+        }
+        
+        return {
+            artifact_id: artifactId,
+            artifact_type: 'onboarding_report',
+            report_type: reportType,
+            generated_at: new Date().toISOString(),
+            checksum,
+            evidence
         };
     }
 
@@ -1322,7 +1482,7 @@ export class OrchestrationTools {
                     dryRun,
                     useLLM: false
                 });
-                adrGenerationParsed = JSON.parse(adrGenerationRaw);
+                adrGenerationParsed = adrGenerationRaw;
                 steps[steps.length - 1] = { step: 'adr_generator', status: 'completed', result: adrGenerationParsed };
             } catch (error: any) {
                 const msg = error?.message || String(error);
@@ -1660,6 +1820,545 @@ export class OrchestrationTools {
         }
 
         return pluginIdInfo;
+    }
+
+    /**
+     * Generate system contract.
+     * 
+     * @param pluginId Plugin ID (optional)
+     * @returns System contract with sources
+     */
+    public async systemContract(args: {
+        pluginId?: string;
+        mode?: 'refs' | 'full';
+        expand?: string[];
+    }): Promise<any> {
+        const resolvedPluginId = this.resolvePluginId(args.pluginId);
+        const mode = args.mode || 'refs';
+        const expand = args.expand || [];
+        
+        const generator = new SystemContractGenerator(this.workspaceRoot, this);
+        
+        try {
+            // Always generate contract (as projection, not stored)
+            const contract = await generator.generate(resolvedPluginId);
+            
+            // Compute artifact ID and checksum
+            const contractJson = JSON.stringify(contract);
+            const checksum = crypto.createHash('sha256').update(contractJson).digest('hex').substring(0, 16);
+            const artifactId = crypto.createHash('sha256')
+                .update(`${resolvedPluginId}:system_contract:${contract.contract_version}:${checksum}`)
+                .digest('hex')
+                .substring(0, 16);
+            
+            // Create evidence sources (compatible with EvidenceSource interface)
+            const evidenceSources: Array<{
+                type: 'ADR' | 'MODULE' | 'SYMBOL' | 'DEPENDENCY' | 'DB_QUERY' | 'STATUS_CHECK' | 'CONTRACT';
+                id?: string;
+                path?: string;
+                hash?: string;
+                metadata?: Record<string, any>;
+            }> = [];
+            
+            // Add sources from contract.sources
+            if (Array.isArray(contract.sources)) {
+                for (const source of contract.sources) {
+                    if (source.type === 'SYSTEM_METADATA') {
+                        evidenceSources.push({
+                            type: 'CONTRACT',
+                            path: source.path,
+                            hash: source.hash,
+                            metadata: { version: contract.contract_version }
+                        });
+                    } else if (source.type === 'STATUS_CHECK') {
+                        evidenceSources.push({
+                            type: 'STATUS_CHECK',
+                            path: source.path,
+                            hash: source.hash
+                        });
+                    }
+                }
+            }
+            
+            // Add dimension sources (inferred from contract) - use DB_QUERY for dimensions
+            if (contract.dimensions) {
+                for (const dim of ['X', 'Y', 'Z', 'W', 'T', 'V'] as const) {
+                    if (contract.dimensions[dim]) {
+                        evidenceSources.push({
+                            type: 'DB_QUERY',
+                            id: dim,
+                            metadata: { dimension: dim }
+                        });
+                    }
+                }
+            }
+            
+            // Create evidence (INFERRED from multiple sources)
+            const evidence = {
+                grade: 'INFERRED' as const,
+                sources: evidenceSources,
+                description: 'System contract derived from dimension facts, runtime status, and system metadata'
+            };
+            
+            // Default: refs mode - return only reference
+            if (mode === 'refs') {
+                // Build preview
+                const preview = {
+                    system_id: contract.system_id,
+                    dimensions_count: Object.keys(contract.dimensions || {}).length,
+                    capabilities_count: contract.capabilities?.tools?.length || 0,
+                    plugins: (contract.plugins || []).map((p: any) => p.name || p)
+                };
+                
+                return {
+                    artifact_id: artifactId,
+                    artifact_type: 'system_contract',
+                    contract_version: contract.contract_version,
+                    generated_at: contract.generated_at,
+                    checksum,
+                    evidence,
+                    preview
+                };
+            }
+            
+            // Full mode: return complete contract (gated)
+            if (mode === 'full') {
+                // Enforce max size (approximate)
+                const contractSize = contractJson.length;
+                const maxSize = 1000000; // 1MB limit
+                if (contractSize > maxSize) {
+                    throw new Error(`Contract size (${contractSize} bytes) exceeds maximum (${maxSize} bytes). Use expand parameter to request specific sections.`);
+                }
+                
+                return {
+                    artifact_id: artifactId,
+                    artifact_type: 'system_contract',
+                    contract_version: contract.contract_version,
+                    generated_at: contract.generated_at,
+                    checksum,
+                    evidence,
+                    contract
+                };
+            }
+            
+            // Expand mode: return contract with only requested sections expanded
+            const result: any = {
+                artifact_id: artifactId,
+                artifact_type: 'system_contract',
+                contract_version: contract.contract_version,
+                generated_at: contract.generated_at,
+                checksum,
+                evidence
+            };
+            
+            // Add expanded sections
+            if (expand.includes('dimensions')) {
+                result.dimensions = contract.dimensions;
+            }
+            if (expand.includes('capabilities')) {
+                result.capabilities = contract.capabilities;
+            }
+            if (expand.includes('runtime_dependencies')) {
+                result.runtime_dependencies = contract.runtime_dependencies;
+            }
+            if (expand.includes('public_api')) {
+                result.public_api = contract.public_api;
+            }
+            if (expand.includes('import_map')) {
+                result.import_map = contract.import_map;
+            }
+            
+            return result;
+        } catch (error: any) {
+            throw new Error(`Failed to generate system contract: ${error?.message || String(error)}`);
+        }
+    }
+
+    /**
+     * Generate tools manifest.
+     * 
+     * @param args Arguments (pluginId, mode, expand)
+     * @returns Tools manifest (refs-first)
+     */
+    public async toolsManifest(args: {
+        pluginId?: string;
+        mode?: 'refs' | 'full';
+        expand?: string[];
+    }): Promise<any> {
+        const resolvedPluginId = this.resolvePluginId(args.pluginId);
+        const mode = args.mode || 'refs';
+        const expand = args.expand || [];
+        
+        // Try to generate system contract (as projection)
+        // In refs mode, we can work without SYSTEM_METADATA.json
+        let contractResult: any = null;
+        let contract: any = null;
+        let contractError: Error | null = null;
+        
+        try {
+            contractResult = await this.systemContract({ pluginId: resolvedPluginId, mode: 'full' });
+            contract = contractResult.contract;
+        } catch (error: any) {
+            contractError = error;
+            // In refs mode, we can still return a minimal reference
+            if (mode === 'refs') {
+                // Return minimal reference immediately
+                const minimalManifest = {
+                    version: '1.0.0',
+                    generated_at: new Date().toISOString(),
+                    tools: []
+                };
+                const manifestJson = JSON.stringify(minimalManifest);
+                const checksum = crypto.createHash('sha256').update(manifestJson).digest('hex').substring(0, 16);
+                const artifactId = crypto.createHash('sha256')
+                    .update(`${resolvedPluginId}:tools_manifest:${minimalManifest.version}:${checksum}`)
+                    .digest('hex')
+                    .substring(0, 16);
+                
+                // Create evidence (HEURISTIC - system metadata missing)
+                const evidence = {
+                    grade: 'HEURISTIC' as const,
+                    sources: [],
+                    description: 'Tools manifest cannot be generated: SYSTEM_METADATA.json not found. Run documentation generation first.'
+                };
+                
+                return {
+                    artifact_id: artifactId,
+                    artifact_type: 'tools_manifest',
+                    manifest_version: minimalManifest.version,
+                    generated_at: minimalManifest.generated_at,
+                    checksum,
+                    evidence,
+                    preview: {
+                        tools_count: 0,
+                        categories: [],
+                        warning: 'SYSTEM_METADATA.json not found. Run documentation generation first for full manifest.'
+                    }
+                };
+            } else {
+                // In full mode, we need the contract
+                throw new Error(`Failed to generate tools manifest: System contract generation failed. ${error?.message || String(error)}. Run documentation generation first to create SYSTEM_METADATA.json.`);
+            }
+        }
+        
+        // Import ToolsManifestGenerator
+        const { ToolsManifestGenerator } = await import('./tools-manifest-generator.js');
+        const generator = new ToolsManifestGenerator();
+        
+        // Generate manifest from contract
+        const manifest = generator.generate(contract);
+        
+        // Compute artifact ID and checksum
+        const manifestJson = JSON.stringify(manifest);
+        const checksum = crypto.createHash('sha256').update(manifestJson).digest('hex').substring(0, 16);
+        const artifactId = crypto.createHash('sha256')
+            .update(`${resolvedPluginId}:tools_manifest:${manifest.version}:${checksum}`)
+            .digest('hex')
+            .substring(0, 16);
+        
+        // Create evidence sources (compatible with EvidenceSource interface)
+        const evidenceSources: Array<{
+            type: 'ADR' | 'MODULE' | 'SYMBOL' | 'DEPENDENCY' | 'DB_QUERY' | 'STATUS_CHECK' | 'CONTRACT';
+            id?: string;
+            path?: string;
+            hash?: string;
+            metadata?: Record<string, any>;
+        }> = [
+            {
+                type: 'CONTRACT',
+                hash: contractResult.checksum,
+                metadata: { version: contract.contract_version }
+            }
+        ];
+        
+        // Create evidence (INFERRED from contract)
+        const evidence = {
+            grade: 'INFERRED' as const,
+            sources: evidenceSources,
+            description: 'Tools manifest derived from system contract capabilities'
+        };
+        
+        // Default: refs mode - return only reference
+        if (mode === 'refs') {
+            // Build preview
+            const categories = new Set<string>();
+            for (const tool of manifest.tools) {
+                if (tool.name.includes('_')) {
+                    const category = tool.name.split('_')[0];
+                    categories.add(category);
+                }
+            }
+            
+            const preview = {
+                tools_count: manifest.tools.length,
+                categories: Array.from(categories).sort()
+            };
+            
+            return {
+                artifact_id: artifactId,
+                artifact_type: 'tools_manifest',
+                manifest_version: manifest.version,
+                generated_at: manifest.generated_at,
+                checksum,
+                evidence,
+                preview
+            };
+        }
+        
+        // Full mode: return complete manifest (gated)
+        if (mode === 'full') {
+            // Enforce max size (approximate)
+            const manifestSize = manifestJson.length;
+            const maxSize = 500000; // 500KB limit
+            if (manifestSize > maxSize) {
+                throw new Error(`Manifest size (${manifestSize} bytes) exceeds maximum (${maxSize} bytes). Use expand parameter to request specific sections.`);
+            }
+            
+            return {
+                artifact_id: artifactId,
+                artifact_type: 'tools_manifest',
+                manifest_version: manifest.version,
+                generated_at: manifest.generated_at,
+                checksum,
+                evidence,
+                manifest
+            };
+        }
+        
+        // Expand mode: return manifest with only requested sections expanded
+        const result: any = {
+            artifact_id: artifactId,
+            artifact_type: 'tools_manifest',
+            manifest_version: manifest.version,
+            generated_at: manifest.generated_at,
+            checksum,
+            evidence
+        };
+        
+        // Add expanded sections
+        if (expand.includes('tools')) {
+            result.tools = manifest.tools;
+        }
+        
+        return result;
+    }
+
+    /**
+     * Export system snapshot (refs-first).
+     * 
+     * @param args Arguments (outputPath, delta, lastSnapshotHash, pluginId, mode, expand)
+     * @returns Snapshot export result (refs-first)
+     */
+    public async exportSnapshot(args: {
+        outputPath?: string;
+        delta?: boolean;
+        lastSnapshotHash?: string;
+        pluginId?: string;
+        mode?: 'refs' | 'full';
+        expand?: string[];
+    }): Promise<any> {
+        const { SnapshotExporter } = await import('./snapshot-exporter.js');
+        const resolvedPluginId = this.resolvePluginId(args.pluginId);
+        const mode = args.mode || 'refs';
+        const expand = args.expand || [];
+        const snapshotType = args.delta ? 'delta' : 'full';
+        
+        const exporter = new SnapshotExporter(this.workspaceRoot, this);
+        
+        // Generate snapshot (as projection, refs-first per ADR-055)
+        let snapshot: any;
+        try {
+            if (args.delta && args.lastSnapshotHash) {
+                snapshot = await exporter.exportDelta(args.lastSnapshotHash, resolvedPluginId, mode, expand);
+            } else {
+                snapshot = await exporter.exportFull(resolvedPluginId, mode, expand);
+            }
+        } catch (error: any) {
+            throw new Error(`Failed to generate snapshot: ${error?.message || String(error)}`);
+        }
+        
+        // In refs mode, snapshot already has artifact_id, checksum, and evidence
+        // In full mode, we need to add them for consistency
+        if (mode === 'full' && !snapshot.artifact_id) {
+            const snapshotJson = JSON.stringify(snapshot);
+            const checksum = crypto.createHash('sha256').update(snapshotJson).digest('hex').substring(0, 16);
+            const artifactId = crypto.createHash('sha256')
+                .update(`${resolvedPluginId}:snapshot:${snapshotType}:${snapshot.snapshot_version}:${checksum}`)
+                .digest('hex')
+                .substring(0, 16);
+            
+            snapshot.artifact_id = artifactId;
+            snapshot.artifact_type = 'snapshot';
+            snapshot.checksum = checksum;
+            
+            // Create evidence sources (compatible with EvidenceSource interface)
+            const evidenceSources: Array<{
+                type: 'ADR' | 'MODULE' | 'SYMBOL' | 'DEPENDENCY' | 'DB_QUERY' | 'STATUS_CHECK' | 'CONTRACT';
+                id?: string;
+                path?: string;
+                hash?: string;
+                metadata?: Record<string, any>;
+            }> = [
+                {
+                    type: 'CONTRACT',
+                    hash: snapshot.checksums?.contract,
+                    metadata: { version: snapshot.contract?.contract_version }
+                }
+            ];
+            
+            // Add dimension sources - use DB_QUERY for dimensions
+            for (const slice of snapshot.dimension_slices || []) {
+                evidenceSources.push({
+                    type: 'DB_QUERY',
+                    id: slice.dimension,
+                    hash: slice.checksum,
+                    metadata: { dimension: slice.dimension, count: slice.count }
+                });
+            }
+            
+            // Create evidence (INFERRED from contract and dimensions)
+            snapshot.evidence = {
+                grade: 'INFERRED' as const,
+                sources: evidenceSources,
+                description: 'Snapshot derived from system contract and dimension slices'
+            };
+        }
+        
+        // Optional: Export to file (only transport, not truth)
+        // In refs mode, only export if outputPath is explicitly provided
+        // In full mode, export by default (or if outputPath is provided)
+        let filePath: string | undefined;
+        if (args.outputPath || (mode === 'full' && !args.outputPath)) {
+            const outputPath = args.outputPath || path.join(this.workspaceRoot, `snapshot_${snapshotType}_${Date.now()}.json`);
+            try {
+                exporter.write(snapshot, outputPath);
+                filePath = outputPath;
+                snapshot.file_path = filePath;
+            } catch (error: any) {
+                // File export is optional, don't fail if it fails
+            }
+        }
+        
+        // Default: refs mode - return only reference
+        if (mode === 'refs') {
+            // In refs mode, snapshot already has artifact_id, checksum, and evidence from SnapshotExporter
+            // Build preview (use snapshot.preview if available, otherwise build from snapshot data)
+            const preview = snapshot.preview || {
+                contract_version: snapshot.contract?.contract_version || null,
+                dimensions_included: (snapshot.dimension_slices || []).map((s: any) => s.dimension),
+                checksums: snapshot.checksums || {}
+            };
+            
+            return {
+                artifact_id: snapshot.artifact_id,
+                artifact_type: snapshot.artifact_type || 'snapshot',
+                snapshot_type: snapshot.snapshot_type || snapshotType,
+                snapshot_version: snapshot.snapshot_version,
+                generated_at: snapshot.generated_at,
+                checksum: snapshot.checksum,
+                evidence: snapshot.evidence,
+                file_path: filePath || snapshot.file_path,
+                preview
+            };
+        }
+        
+        // Full mode: return complete snapshot (gated)
+        if (mode === 'full') {
+            // Enforce max size (approximate)
+            const snapshotJson = JSON.stringify(snapshot);
+            const snapshotSize = snapshotJson.length;
+            const maxSize = 5000000; // 5MB limit
+            if (snapshotSize > maxSize) {
+                throw new Error(`Snapshot size (${snapshotSize} bytes) exceeds maximum (${maxSize} bytes). Use expand parameter to request specific sections.`);
+            }
+            
+            // In full mode, artifact_id, checksum, and evidence are already added to snapshot in lines 2165-2207
+            return {
+                artifact_id: snapshot.artifact_id,
+                artifact_type: snapshot.artifact_type || 'snapshot',
+                snapshot_type: snapshot.snapshot_type || snapshotType,
+                snapshot_version: snapshot.snapshot_version,
+                generated_at: snapshot.generated_at,
+                checksum: snapshot.checksum,
+                evidence: snapshot.evidence,
+                file_path: filePath || snapshot.file_path,
+                ...snapshot  // Spread all snapshot properties (contract, dimension_slices, checksums, etc.)
+            };
+        }
+        
+        // Expand mode: return snapshot with only requested sections expanded
+        // This code should not be reached if mode is 'refs' or 'full', but we handle it for safety
+        const result: any = {
+            artifact_id: snapshot.artifact_id,
+            artifact_type: snapshot.artifact_type || 'snapshot',
+            snapshot_type: snapshot.snapshot_type || snapshotType,
+            snapshot_version: snapshot.snapshot_version,
+            generated_at: snapshot.generated_at,
+            checksum: snapshot.checksum,
+            evidence: snapshot.evidence,
+            file_path: filePath || snapshot.file_path
+        };
+        
+        // Add expanded sections
+        if (expand.includes('contract')) {
+            result.contract = snapshot.contract;
+        }
+        if (expand.includes('dimensions')) {
+            result.dimension_slices = snapshot.dimension_slices;
+        }
+        if (expand.includes('checksums')) {
+            result.checksums = snapshot.checksums;
+        }
+        
+        return result;
+    }
+
+    /**
+     * Get snapshot by artifact ID (refs-first).
+     * 
+     * @param args Arguments (artifactId, pluginId, mode, expand)
+     * @returns Snapshot (refs-first)
+     */
+    public async snapshotGet(args: {
+        artifactId: string;
+        pluginId?: string;
+        mode?: 'refs' | 'full';
+        expand?: string[];
+    }): Promise<any> {
+        // For now, snapshots are not stored, so we can't retrieve by ID
+        // This would require a registry (small file with IDs + checksums)
+        // For now, return error
+        throw new Error('Snapshot retrieval by artifact ID not yet implemented. Use exportSnapshot to generate snapshots.');
+    }
+
+    /**
+     * Import system snapshot.
+     * 
+     * @param args Arguments (snapshotPath, delta, pluginId)
+     * @returns Snapshot import result
+     */
+    public async importSnapshot(args: {
+        snapshotPath: string;
+        delta?: boolean;
+        pluginId?: string;
+    }): Promise<any> {
+        const { SnapshotImporter } = await import('./snapshot-importer.js');
+        const resolvedPluginId = this.resolvePluginId(args.pluginId);
+        const importer = new SnapshotImporter(this.workspaceRoot, this);
+        
+        try {
+            const result = await importer.import(args.snapshotPath, args.delta || false);
+            return {
+                status: result.status,
+                imported_dimensions: result.imported_dimensions,
+                skipped_dimensions: result.skipped_dimensions,
+                checksum_validation: result.checksum_validation,
+                errors: result.errors,
+                message: 'Snapshot imported successfully'
+            };
+        } catch (error: any) {
+            throw new Error(`Failed to import snapshot: ${error?.message || String(error)}`);
+        }
     }
 }
 

@@ -4,9 +4,11 @@ import { z } from 'zod';
 import { WorkspaceResolver } from './workspace-resolver.js';
 import { DatabasePluginAdapter } from './plugins/database-plugin-adapter.js';
 import { DocumentationPluginAdapter } from './plugins/documentation-plugin-adapter.js';
+import { AgentPluginAdapter } from './plugins/agent-plugin-adapter.js';
 import { DatabaseTools } from './tools/database-tools.js';
 import { ValidationTools } from './tools/validation-tools.js';
 import { OrchestrationTools } from './tools/orchestration-tools.js';
+import { AgentTools } from './tools/agent-tools.js';
 import { config } from 'dotenv';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -21,9 +23,11 @@ export class UnifiedMcpServer {
     private workspaceRoot: string;
     private databaseAdapter: DatabasePluginAdapter;
     private documentationAdapter: DocumentationPluginAdapter;
+    private agentPluginAdapter: AgentPluginAdapter;
     private databaseTools: DatabaseTools;
     private validationTools: ValidationTools;
     private orchestrationTools: OrchestrationTools;
+    private agentTools: AgentTools;
     private initialized: boolean = false;
     private initializationError: string | null = null;
 
@@ -37,6 +41,7 @@ export class UnifiedMcpServer {
         const pluginPaths = WorkspaceResolver.findPluginPaths(workspaceRoot);
         this.databaseAdapter = new DatabasePluginAdapter(workspaceRoot, pluginPaths.databasePlugin);
         this.documentationAdapter = new DocumentationPluginAdapter(workspaceRoot, pluginPaths.documentationPlugin);
+        this.agentPluginAdapter = new AgentPluginAdapter(workspaceRoot, pluginPaths.agentPlugin);
 
         // Initialize tools
         this.databaseTools = new DatabaseTools(this.databaseAdapter);
@@ -46,6 +51,7 @@ export class UnifiedMcpServer {
             this.validationTools,
             workspaceRoot
         );
+        this.agentTools = new AgentTools({ workspaceRoot, adapter: this.agentPluginAdapter });
 
         // Initialize MCP server
         this.server = new Server(
@@ -98,6 +104,9 @@ export class UnifiedMcpServer {
         try {
             if (this.databaseAdapter.isAvailable()) {
                 await this.databaseTools.initialize();
+            }
+            if (this.agentPluginAdapter.isAvailable()) {
+                await this.agentTools.initialize();
             }
             this.initialized = true;
             this.initializationError = null;
@@ -381,11 +390,101 @@ export class UnifiedMcpServer {
                             },
                             required: ['pluginId']
                         }
+                    },
+                    {
+                        name: 'vector_backend_status',
+                        description: 'Get vector backend status with reason codes and action hints',
+                        inputSchema: {
+                            type: 'object' as const,
+                            properties: {},
+                            required: []
+                        }
+                    },
+                    {
+                        name: 'vector_backend_healthcheck',
+                        description: 'Perform healthcheck on vector backend (latency, error codes, reason codes)',
+                        inputSchema: {
+                            type: 'object' as const,
+                            properties: {},
+                            required: []
+                        }
+                    },
+                    {
+                        name: 'source_access_contract',
+                        description: 'Get source access contract (deterministic status of code availability)',
+                        inputSchema: {
+                            type: 'object' as const,
+                            properties: {
+                                workspaceRoot: { type: 'string' as const }
+                            },
+                            required: []
+                        }
+                    },
+                    {
+                        name: 'source_snippet',
+                        description: 'Fetch source code snippet by reference (gated, refs-first)',
+                        inputSchema: {
+                            type: 'object' as const,
+                            properties: {
+                                symbol_id: { type: 'string' as const },
+                                file_path: { type: 'string' as const },
+                                start_line: { type: 'number' as const },
+                                end_line: { type: 'number' as const },
+                                content_hash: { type: 'string' as const },
+                                include_context: { type: 'boolean' as const },
+                                context_lines: { type: 'number' as const },
+                                verify_hash: { type: 'boolean' as const },
+                                pluginId: { type: 'string' as const },
+                                workspaceRoot: { type: 'string' as const }
+                            },
+                            required: ['pluginId']
+                        }
                     }
                 );
             }
 
             // Validation tools
+            // Note: runDriftCheck, analyzeImpact, and verifyAdrs are now local functions
+            // and should always be available, even if the plugin is not available.
+            // Only runScan and runValidate require the plugin.
+            
+            // Always register drift, impact, and verifyAdrs (local functions)
+                tools.push(
+                    {
+                    name: 'validation_runDriftCheck',
+                    description: 'Check for drift between code and documentation',
+                        inputSchema: {
+                            type: 'object' as const,
+                            properties: {
+                            since: { type: 'string' as const }
+                            }
+                        }
+                    },
+                    {
+                    name: 'validation_analyzeImpact',
+                    description: 'Analyze impact of changes to a file or symbol',
+                        inputSchema: {
+                            type: 'object' as const,
+                            properties: {
+                            file: { type: 'string' as const },
+                            symbol: { type: 'string' as const }
+                                },
+                        required: ['file']
+                        }
+                    },
+                    {
+                    name: 'validation_verifyAdrs',
+                    description: 'Verify ADR claims against code',
+                        inputSchema: {
+                            type: 'object' as const,
+                            properties: {
+                            verbose: { type: 'boolean' as const, default: false }
+                            }
+                        }
+                }
+            );
+
+            // Only register scan and validate if plugin is available
             if (this.documentationAdapter.isAvailable()) {
                 tools.push(
                     {
@@ -397,7 +496,7 @@ export class UnifiedMcpServer {
                                 files: {
                                     type: 'array' as const,
                                     items: { type: 'string' as const }
-                                },
+                            },
                                 incremental: { type: 'boolean' as const, default: true }
                             }
                         }
@@ -412,38 +511,6 @@ export class UnifiedMcpServer {
                                     type: 'array' as const,
                                     items: { type: 'string' as const }
                                 },
-                                verbose: { type: 'boolean' as const, default: false }
-                            }
-                        }
-                    },
-                    {
-                        name: 'validation_runDriftCheck',
-                        description: 'Check for drift between code and documentation',
-                        inputSchema: {
-                            type: 'object' as const,
-                            properties: {
-                                since: { type: 'string' as const }
-                            }
-                        }
-                    },
-                    {
-                        name: 'validation_analyzeImpact',
-                        description: 'Analyze impact of changes to a file or symbol',
-                        inputSchema: {
-                            type: 'object' as const,
-                            properties: {
-                                file: { type: 'string' as const },
-                                symbol: { type: 'string' as const }
-                            },
-                            required: ['file']
-                        }
-                    },
-                    {
-                        name: 'validation_verifyAdrs',
-                        description: 'Verify ADR claims against code',
-                        inputSchema: {
-                            type: 'object' as const,
-                            properties: {
                                 verbose: { type: 'boolean' as const, default: false }
                             }
                         }
@@ -497,12 +564,15 @@ export class UnifiedMcpServer {
                 },
                 {
                     name: 'workflow_onboard',
-                    description: 'Onboard a foreign codebase: ensure readiness (optional) and return a deterministic onboarding report (Markdown + JSON)',
+                    description: 'Onboard a foreign codebase: ensure readiness (optional) and return a deterministic onboarding report (Markdown + JSON). Use summaryOnly=true for compact output.',
                     inputSchema: {
                         type: 'object' as const,
                         properties: {
                             pluginId: { type: 'string' as const },
                             ensureReady: { type: 'boolean' as const, default: true },
+                            summaryOnly: { type: 'boolean' as const, description: 'If true, returns only summary without full details (reduces output size)' },
+                            excludeMarkdown: { type: 'boolean' as const, description: 'If true, excludes reportMarkdown from output' },
+                            excludeSteps: { type: 'boolean' as const, description: 'If true, excludes detailed steps from output' },
                             semanticQueries: {
                                 type: 'array' as const,
                                 items: { type: 'string' as const }
@@ -514,13 +584,36 @@ export class UnifiedMcpServer {
                     }
                 },
                 {
+                    name: 'workflow_boundary_report',
+                    description: 'Get system boundary report: workspace root detection, plugin roots, exclude directories, path normalization rules, and boundary validation. Helps identify workspace boundaries for foreign codebases.',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            pluginId: { type: 'string' as const, description: 'Plugin ID for validation (optional)' },
+                            workspaceRoot: { type: 'string' as const, description: 'Override workspace root (optional)' }
+                        }
+                    }
+                },
+                {
+                    name: 'workflow_path_alias_healing',
+                    description: 'Automatically fix path aliases when verifyAdrs reports "src missing" errors. Reads boundary_report, generates alias map (e.g., "src/path/file.ts" -> "plugin/src/path/file.ts"), persists it, and optionally reruns verifyAdrs.',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            pluginId: { type: 'string' as const, description: 'Plugin ID (optional)' },
+                            autoFix: { type: 'boolean' as const, description: 'If true, automatically applies fixes and reruns verifyAdrs (default: true)' }
+                        }
+                    }
+                },
+                {
                     name: 'workflow_ingest',
-                    description: 'Ingest documentation into database (full or incremental)',
+                    description: 'Ingest documentation into database (full or incremental). Automatically cleans up old databases with different plugin ID when --full is used and mismatch is detected.',
                     inputSchema: {
                         type: 'object' as const,
                         properties: {
                             pluginId: { type: 'string' as const },
-                            full: { type: 'boolean' as const, default: true }
+                            full: { type: 'boolean' as const, default: true, description: 'Run full ingestion (automatically cleans up old databases if plugin ID mismatch detected)' },
+                            cleanup: { type: 'boolean' as const, default: false, description: 'Explicitly cleanup old databases with different plugin ID (optional, auto-cleanup happens on --full if mismatch detected)' }
                         },
                         required: ['pluginId']
                     }
@@ -622,6 +715,234 @@ export class UnifiedMcpServer {
                             }
                         }
                     }
+                },
+                {
+                    name: 'system_contract',
+                    description: 'Generate system contract (Integration Contract with versioning, capabilities, canonical IDs). Default mode="refs" returns only reference. Use mode="full" for complete contract or expand=[...] for specific sections.',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            pluginId: { type: 'string' as const },
+                            mode: { 
+                                type: 'string' as const, 
+                                enum: ['refs', 'full'],
+                                description: 'Output mode: "refs" (default, reference only) or "full" (complete contract, gated)'
+                            },
+                            expand: {
+                                type: 'array' as const,
+                                items: { type: 'string' as const },
+                                description: 'Specific sections to expand: ["dimensions", "capabilities", "runtime_dependencies", "public_api", "import_map"]'
+                            }
+                        }
+                    }
+                },
+                {
+                    name: 'tools_manifest',
+                    description: 'Generate tools manifest. Default mode="refs" returns only reference. Use mode="full" for complete manifest or expand=[...] for specific sections.',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            pluginId: { type: 'string' as const },
+                            mode: { 
+                                type: 'string' as const, 
+                                enum: ['refs', 'full'],
+                                description: 'Output mode: "refs" (default, reference only) or "full" (complete manifest, gated)'
+                            },
+                            expand: {
+                                type: 'array' as const,
+                                items: { type: 'string' as const },
+                                description: 'Specific sections to expand: ["tools"]'
+                            }
+                        }
+                    }
+                },
+                {
+                    name: 'onboarding_report',
+                    description: 'Generate onboarding report. Default mode="refs" returns only reference. Use mode="full" for complete report.',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            pluginId: { type: 'string' as const },
+                            mode: { 
+                                type: 'string' as const, 
+                                enum: ['refs', 'full'],
+                                description: 'Output mode: "refs" (default, reference only) or "full" (complete report, gated)'
+                            },
+                            reportType: {
+                                type: 'string' as const,
+                                enum: ['summary', 'full'],
+                                description: 'Report type: "summary" (default, compact) or "full" (detailed)'
+                            }
+                        }
+                    }
+                },
+                {
+                    name: 'export_snapshot',
+                    description: 'Export system snapshot (contract + dimension slices + checksums). Default mode="refs" returns only reference. Use mode="full" for complete snapshot. Supports full and delta snapshots.',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            outputPath: { type: 'string' as const },
+                            delta: { type: 'boolean' as const },
+                            lastSnapshotHash: { type: 'string' as const },
+                            pluginId: { type: 'string' as const },
+                            mode: { 
+                                type: 'string' as const, 
+                                enum: ['refs', 'full'],
+                                description: 'Output mode: "refs" (default, reference only) or "full" (complete snapshot, gated)'
+                            },
+                            expand: {
+                                type: 'array' as const,
+                                items: { type: 'string' as const },
+                                description: 'Specific sections to expand: ["contract", "dimensions", "checksums"]'
+                            }
+                        }
+                    }
+                },
+                {
+                    name: 'snapshot_get',
+                    description: 'Get snapshot by artifact ID. Default mode="refs" returns only reference. Use mode="full" for complete snapshot.',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            artifactId: { type: 'string' as const },
+                            pluginId: { type: 'string' as const },
+                            mode: { 
+                                type: 'string' as const, 
+                                enum: ['refs', 'full'],
+                                description: 'Output mode: "refs" (default, reference only) or "full" (complete snapshot, gated)'
+                            },
+                            expand: {
+                                type: 'array' as const,
+                                items: { type: 'string' as const },
+                                description: 'Specific sections to expand: ["contract", "dimensions", "checksums"]'
+                            }
+                        },
+                        required: ['artifactId']
+                    }
+                },
+                {
+                    name: 'import_snapshot',
+                    description: 'Import system snapshot. Supports full and delta snapshots.',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            snapshotPath: { type: 'string' as const },
+                            delta: { type: 'boolean' as const },
+                            pluginId: { type: 'string' as const }
+                        },
+                        required: ['snapshotPath']
+                    }
+                },
+                {
+                    name: 'explain_tools',
+                    description: 'Get comprehensive guide to all available tools: explanations, workflow patterns, examples, and recommendations. Helps AI agents understand which tools to use and how to combine them.',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            category: {
+                                type: 'string' as const,
+                                enum: ['database', 'validation', 'orchestration', 'all'],
+                                description: 'Filter tools by category (default: all)'
+                            },
+                            toolName: {
+                                type: 'string' as const,
+                                description: 'Get detailed information for a specific tool'
+                            },
+                            useCase: {
+                                type: 'string' as const,
+                                description: 'Get tool recommendations for a specific use case (e.g., "understand module", "find code", "validate docs")'
+                            }
+                        }
+                    }
+                },
+                // Agent-5D-System Tools
+                {
+                    name: 'query_agents',
+                    description: 'Query agents by path or agent ID (X-Dimension: Agent structure)',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            agentPath: { type: 'string' as const },
+                            agentId: { type: 'string' as const },
+                            pluginId: { type: 'string' as const }
+                        },
+                        required: ['pluginId']
+                    }
+                },
+                {
+                    name: 'query_agent_components',
+                    description: 'Query agent components by path or component ID (Y-Dimension: Agent components)',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            path: { type: 'string' as const },
+                            componentId: { type: 'string' as const },
+                            pluginId: { type: 'string' as const }
+                        },
+                        required: ['pluginId']
+                    }
+                },
+                {
+                    name: 'query_agent_dependencies',
+                    description: 'Query agent dependencies (Z-Dimension: Dependencies between agent components)',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            fromAgent: { type: 'string' as const },
+                            toAgent: { type: 'string' as const },
+                            pluginId: { type: 'string' as const }
+                        },
+                        required: ['pluginId']
+                    }
+                },
+                {
+                    name: 'query_agent_decisions',
+                    description: 'Query agent decisions (W-Dimension: Agent design decisions, patterns, trade-offs)',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            decisionNumberOrPath: { type: 'string' as const },
+                            pluginId: { type: 'string' as const }
+                        },
+                        required: ['pluginId']
+                    }
+                },
+                {
+                    name: 'query_agent_changes',
+                    description: 'Query agent changes (T-Dimension: Agent evolution over time)',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            pluginId: { type: 'string' as const }
+                        },
+                        required: ['pluginId']
+                    }
+                },
+                {
+                    name: 'semantic_discovery_agents',
+                    description: 'Semantic search over agent patterns (V-Dimension: Semantic search)',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            query: { type: 'string' as const },
+                            pluginId: { type: 'string' as const },
+                            limit: { type: 'number' as const, default: 10 }
+                        },
+                        required: ['query', 'pluginId']
+                    }
+                },
+                {
+                    name: 'cross_analysis_agent',
+                    description: 'Cross-dimension analysis for agents (combines X, Y, Z, W, T dimensions)',
+                    inputSchema: {
+                        type: 'object' as const,
+                        properties: {
+                            agentPath: { type: 'string' as const },
+                            pluginId: { type: 'string' as const }
+                        },
+                        required: ['agentPath', 'pluginId']
+                    }
                 }
             );
 
@@ -652,6 +973,8 @@ export class UnifiedMcpServer {
                     'workflow_generate_and_ingest',
                     'workflow_full_cycle',
                     'workflow_ingest',
+                    'workflow_boundary_report',  // Filesystem-only, no DB needed
+                    'workflow_path_alias_healing',  // Uses verifyAdrs but doesn't require DB
                     // Co-partner helpers are deterministic and do not require DB access
                     'workflow_co_partner_plan',
                     'workflow_co_partner_feedback',
@@ -669,6 +992,10 @@ export class UnifiedMcpServer {
                     name === 'architecture_mining' ||
                     name === 'adr_generator' ||
                     name === 'generate_adr' ||
+                    name === 'vector_backend_status' ||
+                    name === 'vector_backend_healthcheck' ||
+                    name === 'source_access_contract' ||
+                    name === 'source_snippet' ||
                     (name.startsWith('workflow_') && !workflowSafeWithoutDbInit.has(name));
 
                 if (needsDbInit && !this.initialized) {
@@ -687,7 +1014,11 @@ export class UnifiedMcpServer {
                     name === 'generate_documentation' ||
                     name === 'check_docs_status' ||
                     name === 'adr_generator' ||
-                    name === 'generate_adr') {
+                    name === 'generate_adr' ||
+                    name === 'vector_backend_status' ||
+                    name === 'vector_backend_healthcheck' ||
+                    name === 'source_access_contract' ||
+                    name === 'source_snippet') {
                     
                     if (!this.databaseAdapter.isAvailable()) {
                         throw new Error('5D Database Plugin is not available');
@@ -732,27 +1063,29 @@ export class UnifiedMcpServer {
 
                         case 'semantic_discovery':
                             const discovery = await this.databaseTools.semanticDiscovery({ ...args, pluginId: resolvedPluginId });
-                            return { content: [{ type: 'text', text: discovery }] };
+                            // Simple serialization - discovery is already an object, just stringify it
+                            const serialized = JSON.stringify(discovery, null, 2);
+                            return { content: [{ type: 'text', text: serialized }] };
 
                         case 'system_explanation':
                             const explanation = await this.databaseTools.systemExplanation(resolvedPluginId);
-                            return { content: [{ type: 'text', text: explanation }] };
+                            return { content: [{ type: 'text', text: JSON.stringify(explanation, null, 2) }] };
 
                         case 'learning_path':
                             const learningPath = await this.databaseTools.learningPath(args.topic, resolvedPluginId);
-                            return { content: [{ type: 'text', text: learningPath }] };
+                            return { content: [{ type: 'text', text: JSON.stringify(learningPath, null, 2) }] };
 
                         case 'bootstrap':
                             const bootstrap = await this.databaseTools.bootstrap(resolvedPluginId);
-                            return { content: [{ type: 'text', text: bootstrap }] };
+                            return { content: [{ type: 'text', text: JSON.stringify(bootstrap, null, 2) }] };
 
                         case 'gap_analysis':
                             const gapAnalysis = await this.databaseTools.gapAnalysis({ ...args, pluginId: resolvedPluginId });
-                            return { content: [{ type: 'text', text: gapAnalysis }] };
+                            return { content: [{ type: 'text', text: JSON.stringify(gapAnalysis, null, 2) }] };
 
                         case 'architecture_mining':
                             const architectureMining = await this.databaseTools.architectureMining({ ...args, pluginId: resolvedPluginId });
-                            return { content: [{ type: 'text', text: architectureMining }] };
+                            return { content: [{ type: 'text', text: JSON.stringify(architectureMining, null, 2) }] };
 
                         case 'generate_documentation':
                             const generateResult = await this.databaseTools.generateDocumentation(resolvedPluginId);
@@ -765,7 +1098,23 @@ export class UnifiedMcpServer {
                         case 'adr_generator':
                         case 'generate_adr':
                             const adrGeneratorResult = await this.databaseTools.adrGenerator({ ...args, pluginId: resolvedPluginId });
-                            return { content: [{ type: 'text', text: adrGeneratorResult }] };
+                            return { content: [{ type: 'text', text: JSON.stringify(adrGeneratorResult, null, 2) }] };
+
+                        case 'vector_backend_status':
+                            const vectorStatus = await this.databaseTools.getVectorBackendStatus();
+                            return { content: [{ type: 'text', text: JSON.stringify(vectorStatus, null, 2) }] };
+
+                        case 'vector_backend_healthcheck':
+                            const vectorHealthcheck = await this.databaseTools.healthcheckVectorBackend();
+                            return { content: [{ type: 'text', text: JSON.stringify(vectorHealthcheck, null, 2) }] };
+
+                        case 'source_access_contract':
+                            const contract = await this.databaseTools.sourceAccessContract(args);
+                            return { content: [{ type: 'text', text: JSON.stringify(contract, null, 2) }] };
+
+                        case 'source_snippet':
+                            const snippet = await this.databaseTools.sourceSnippet({ ...args, pluginId: resolvedPluginId });
+                            return { content: [{ type: 'text', text: JSON.stringify(snippet, null, 2) }] };
 
                         default:
                             throw new Error(`Unknown database tool: ${name}`);
@@ -774,28 +1123,35 @@ export class UnifiedMcpServer {
 
                 // Validation tools
                 if (name.startsWith('validation_')) {
+                    switch (name) {
+                        case 'validation_runScan':
+                            // Requires plugin availability
                     if (!this.documentationAdapter.isAvailable()) {
                         throw new Error('Documentation System Plugin is not available');
                     }
-
-                    switch (name) {
-                        case 'validation_runScan':
                             const scanResult = await this.validationTools.runScan(args);
                             return { content: [{ type: 'text', text: JSON.stringify(scanResult, null, 2) }] };
 
                         case 'validation_runValidate':
+                            // Requires plugin availability
+                            if (!this.documentationAdapter.isAvailable()) {
+                                throw new Error('Documentation System Plugin is not available');
+                            }
                             const validateResult = await this.validationTools.runValidate(args);
                             return { content: [{ type: 'text', text: JSON.stringify(validateResult, null, 2) }] };
 
                         case 'validation_runDriftCheck':
+                            // Local function - doesn't require plugin availability
                             const driftResult = await this.validationTools.runDriftCheck(args);
                             return { content: [{ type: 'text', text: JSON.stringify(driftResult, null, 2) }] };
 
                         case 'validation_analyzeImpact':
+                            // Local function - doesn't require plugin availability
                             const impactResult = await this.validationTools.analyzeImpact(args);
                             return { content: [{ type: 'text', text: JSON.stringify(impactResult, null, 2) }] };
 
                         case 'validation_verifyAdrs':
+                            // Uses script - only requires plugin path, not full availability
                             const verifyResult = await this.validationTools.verifyAdrs(args);
                             return { content: [{ type: 'text', text: JSON.stringify(verifyResult, null, 2) }] };
 
@@ -805,7 +1161,7 @@ export class UnifiedMcpServer {
                 }
 
                 // Orchestration tools
-                if (name.startsWith('workflow_')) {
+                if (name.startsWith('workflow_') || name === 'system_contract' || name === 'tools_manifest' || name === 'onboarding_report' || name === 'export_snapshot' || name === 'snapshot_get' || name === 'import_snapshot' || name === 'explain_tools') {
                     // Resolve plugin ID for workflow tools (supports "." for auto-computation)
                     const workflowPluginId = this.resolvePluginId(args.pluginId);
                     
@@ -830,11 +1186,32 @@ export class UnifiedMcpServer {
                             const onboardResult = await this.orchestrationTools.onboard({ ...args, pluginId: workflowPluginId });
                             return { content: [{ type: 'text', text: JSON.stringify(onboardResult, null, 2) }] };
 
+                        case 'workflow_boundary_report':
+                            // Import BoundaryReportGenerator dynamically
+                            const { BoundaryReportGenerator } = await import('./tools/boundary-report-generator.js');
+                            const boundaryGenerator = new BoundaryReportGenerator(this.workspaceRoot);
+                            const boundaryResult = await boundaryGenerator.generate({
+                                pluginId: workflowPluginId,
+                                workspaceRoot: args.workspaceRoot as string | undefined
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(boundaryResult, null, 2) }] };
+
+                        case 'workflow_path_alias_healing':
+                            // Import PathAliasHealing dynamically
+                            const { PathAliasHealing } = await import('./tools/path-alias-healing.js');
+                            const pathAliasHealing = new PathAliasHealing(this.workspaceRoot);
+                            const healingResult = await pathAliasHealing.heal({
+                                pluginId: workflowPluginId,
+                                autoFix: args.autoFix as boolean | undefined,
+                                validationTools: this.validationTools
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(healingResult, null, 2) }] };
+
                         case 'workflow_ingest':
                             if (!this.databaseAdapter.isAvailable()) {
                                 throw new Error('5D Database Plugin is not available');
                             }
-                            const ingestResult = await this.databaseTools.runIngestion(workflowPluginId, args.full !== false);
+                            const ingestResult = await this.databaseTools.runIngestion(workflowPluginId, args.full !== false, args.cleanup === true);
                             return { content: [{ type: 'text', text: JSON.stringify(ingestResult, null, 2) }] };
 
                         case 'workflow_autonomous_feature':
@@ -861,8 +1238,134 @@ export class UnifiedMcpServer {
                             const coPartnerRollbackResult = await this.orchestrationTools.coPartnerRollback(args);
                             return { content: [{ type: 'text', text: JSON.stringify(coPartnerRollbackResult, null, 2) }] };
 
+                        case 'system_contract':
+                            const contractResult = await this.orchestrationTools.systemContract({
+                                pluginId: workflowPluginId,
+                                mode: args.mode as 'refs' | 'full' | undefined,
+                                expand: args.expand as string[] | undefined
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(contractResult, null, 2) }] };
+
+                        case 'tools_manifest':
+                            const toolsManifestResult = await this.orchestrationTools.toolsManifest({
+                                pluginId: workflowPluginId,
+                                mode: args.mode as 'refs' | 'full' | undefined,
+                                expand: args.expand as string[] | undefined
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(toolsManifestResult, null, 2) }] };
+
+                        case 'onboarding_report':
+                            const onboardingReportResult = await this.orchestrationTools.onboardingReport({
+                                pluginId: workflowPluginId,
+                                mode: args.mode as 'refs' | 'full' | undefined,
+                                reportType: args.reportType as 'summary' | 'full' | undefined
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(onboardingReportResult, null, 2) }] };
+
+                        case 'export_snapshot':
+                            const exportSnapshotResult = await this.orchestrationTools.exportSnapshot({
+                                outputPath: args.outputPath,
+                                delta: args.delta,
+                                lastSnapshotHash: args.lastSnapshotHash,
+                                pluginId: workflowPluginId,
+                                mode: args.mode as 'refs' | 'full' | undefined,
+                                expand: args.expand as string[] | undefined
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(exportSnapshotResult, null, 2) }] };
+
+                        case 'snapshot_get':
+                            const snapshotGetResult = await this.orchestrationTools.snapshotGet({
+                                artifactId: args.artifactId as string,
+                                pluginId: workflowPluginId,
+                                mode: args.mode as 'refs' | 'full' | undefined,
+                                expand: args.expand as string[] | undefined
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(snapshotGetResult, null, 2) }] };
+
+                        case 'import_snapshot':
+                            if (!args.snapshotPath) {
+                                throw new Error('snapshotPath is required for import_snapshot');
+                            }
+                            const importSnapshotResult = await this.orchestrationTools.importSnapshot({
+                                snapshotPath: args.snapshotPath,
+                                delta: args.delta,
+                                pluginId: workflowPluginId
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(importSnapshotResult, null, 2) }] };
+
+                        case 'explain_tools':
+                            // Import ToolGuide dynamically
+                            const { ToolGuide } = await import('./tools/tool-guide.js');
+                            const toolGuide = new ToolGuide();
+                            const explainResult = await toolGuide.explainTools({
+                                category: args.category,
+                                toolName: args.toolName,
+                                useCase: args.useCase
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(explainResult, null, 2) }] };
+
                         default:
                             throw new Error(`Unknown orchestration tool: ${name}`);
+                    }
+                }
+
+                // Agent-5D-System Tools (no DB initialization needed initially, will require Agent APIs later)
+                if (name.startsWith('query_agent') || name === 'semantic_discovery_agents' || name === 'cross_analysis_agent') {
+                    switch (name) {
+                        case 'query_agents':
+                            const queryAgentsResult = await this.agentTools.queryAgents({
+                                agentPath: args.agentPath,
+                                agentId: args.agentId,
+                                pluginId: args.pluginId
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(queryAgentsResult, null, 2) }] };
+
+                        case 'query_agent_components':
+                            const queryComponentsResult = await this.agentTools.queryAgentComponents({
+                                path: args.path,
+                                componentId: args.componentId,
+                                pluginId: args.pluginId
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(queryComponentsResult, null, 2) }] };
+
+                        case 'query_agent_dependencies':
+                            const queryDepsResult = await this.agentTools.queryAgentDependencies({
+                                fromAgent: args.fromAgent,
+                                toAgent: args.toAgent,
+                                pluginId: args.pluginId
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(queryDepsResult, null, 2) }] };
+
+                        case 'query_agent_decisions':
+                            const queryDecisionsResult = await this.agentTools.queryAgentDecisions({
+                                decisionNumberOrPath: args.decisionNumberOrPath,
+                                pluginId: args.pluginId
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(queryDecisionsResult, null, 2) }] };
+
+                        case 'query_agent_changes':
+                            const queryChangesResult = await this.agentTools.queryAgentChanges({
+                                pluginId: args.pluginId
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(queryChangesResult, null, 2) }] };
+
+                        case 'semantic_discovery_agents':
+                            const semanticResult = await this.agentTools.semanticDiscoveryAgents({
+                                query: args.query,
+                                pluginId: args.pluginId,
+                                limit: args.limit
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(semanticResult, null, 2) }] };
+
+                        case 'cross_analysis_agent':
+                            const crossAnalysisResult = await this.agentTools.crossAnalysisAgent({
+                                agentPath: args.agentPath,
+                                pluginId: args.pluginId
+                            });
+                            return { content: [{ type: 'text', text: JSON.stringify(crossAnalysisResult, null, 2) }] };
+
+                        default:
+                            throw new Error(`Unknown agent tool: ${name}`);
                     }
                 }
 
@@ -900,6 +1403,7 @@ export class UnifiedMcpServer {
         // (foreign systems sometimes pass plugin *names* instead of plugin_id).
         const aliasValues = new Set([
             '.',
+            'default',  // ✅ Fix: Add "default" explicitly
             'documentation-system-plugin',
             '@noyrax/documentation-system-plugin',
             '5d-database-plugin',

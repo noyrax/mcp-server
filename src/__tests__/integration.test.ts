@@ -449,6 +449,41 @@ describe('UnifiedMcpServer Integration', () => {
                     expect(response.result).toHaveProperty('content');
                 }
             });
+
+            it('should call workflow_boundary_report tool', async () => {
+                const pluginId = Buffer.from(testWorkspaceRoot).toString('base64').substring(0, 16);
+
+                const response = await client.sendRequest('tools/call', {
+                    name: 'workflow_boundary_report',
+                    arguments: {
+                        pluginId
+                    }
+                });
+
+                expect(response).toBeDefined();
+                expect(response.jsonrpc).toBe('2.0');
+
+                if (response.error) {
+                    // Error is acceptable
+                    expect(response.error).toHaveProperty('code');
+                    expect(response.error).toHaveProperty('message');
+                } else {
+                    // Success: should have boundary report content
+                    expect(response.result).toBeDefined();
+                    expect(response.result).toHaveProperty('content');
+                    
+                    const content = JSON.parse(response.result.content[0].text);
+                    expect(content).toHaveProperty('workspace_root');
+                    expect(content).toHaveProperty('detected_plugin_roots');
+                    expect(content).toHaveProperty('exclude_dirs');
+                    expect(content).toHaveProperty('path_normalization');
+                    expect(content).toHaveProperty('ignore_rules');
+                    expect(content).toHaveProperty('boundary_validation');
+                    expect(content).toHaveProperty('evidence');
+                    expect(content.evidence.grade).toBe('FACT');
+                    expect(Array.isArray(content.evidence.sources)).toBe(true);
+                }
+            });
         });
 
         describe('Validation Tools (if available)', () => {
@@ -517,6 +552,147 @@ describe('UnifiedMcpServer Integration', () => {
                     expect(response.error).toHaveProperty('code');
                     expect(response.error).toHaveProperty('message');
                 }
+            });
+        });
+
+        describe('Boundary Report', () => {
+            it('should call workflow_boundary_report tool', async () => {
+                const pluginId = Buffer.from(testWorkspaceRoot).toString('base64').substring(0, 16);
+
+                const response = await client.sendRequest('tools/call', {
+                    name: 'workflow_boundary_report',
+                    arguments: {
+                        pluginId
+                    }
+                });
+
+                expect(response).toBeDefined();
+                expect(response.jsonrpc).toBe('2.0');
+
+                if (response.error) {
+                    // Error is acceptable
+                    expect(response.error).toHaveProperty('code');
+                    expect(response.error).toHaveProperty('message');
+                } else {
+                    // Success: should have boundary report content
+                    expect(response.result).toBeDefined();
+                    expect(response.result).toHaveProperty('content');
+                    
+                    const content = JSON.parse(response.result.content[0].text);
+                    expect(content).toHaveProperty('workspace_root');
+                    expect(content).toHaveProperty('detected_plugin_roots');
+                    expect(content).toHaveProperty('exclude_dirs');
+                    expect(content).toHaveProperty('path_normalization');
+                    expect(content).toHaveProperty('ignore_rules');
+                    expect(content).toHaveProperty('boundary_validation');
+                    expect(content).toHaveProperty('evidence');
+                    expect(content.evidence.grade).toBe('FACT');
+                    expect(Array.isArray(content.evidence.sources)).toBe(true);
+                }
+            });
+        });
+
+        describe('Evidence Grading', () => {
+            it('should have evidence in query_modules response', async () => {
+                const pluginId = Buffer.from(testWorkspaceRoot).toString('base64').substring(0, 16);
+                const dbAdapter = new DatabasePluginAdapter(testWorkspaceRoot);
+                
+                if (!dbAdapter.isAvailable()) {
+                    // Skip if plugin not available
+                    return;
+                }
+
+                const server = new UnifiedMcpServer(testWorkspaceRoot);
+                await server.initialize();
+                
+                const response = await client.sendRequest('tools/call', {
+                    name: 'query_modules',
+                    arguments: {
+                        filePath: 'mcp-server/src/server.ts',
+                        pluginId
+                    }
+                });
+
+                if (response.error) {
+                    // Error is acceptable if DBs/docs not available
+                    return;
+                }
+
+                expect(response.result).toBeDefined();
+                const content = JSON.parse(response.result.content[0].text);
+                expect(content).toHaveProperty('evidence');
+                expect(content.evidence).toHaveProperty('grade');
+                expect(['FACT', 'INFERRED', 'HEURISTIC']).toContain(content.evidence.grade);
+                expect(Array.isArray(content.evidence.sources)).toBe(true);
+            });
+
+            it('should have evidence in cross_analysis response', async () => {
+                const pluginId = Buffer.from(testWorkspaceRoot).toString('base64').substring(0, 16);
+                const dbAdapter = new DatabasePluginAdapter(testWorkspaceRoot);
+                
+                if (!dbAdapter.isAvailable()) {
+                    // Skip if plugin not available
+                    return;
+                }
+
+                const server = new UnifiedMcpServer(testWorkspaceRoot);
+                await server.initialize();
+                
+                const response = await client.sendRequest('tools/call', {
+                    name: 'cross_analysis',
+                    arguments: {
+                        filePath: 'mcp-server/src/server.ts',
+                        pluginId
+                    }
+                });
+
+                if (response.error) {
+                    // Error is acceptable if DBs/docs not available
+                    return;
+                }
+
+                expect(response.result).toBeDefined();
+                const content = JSON.parse(response.result.content[0].text);
+                expect(content).toHaveProperty('evidence');
+                expect(content.evidence).toHaveProperty('grade');
+                expect(['FACT', 'INFERRED', 'HEURISTIC']).toContain(content.evidence.grade);
+                expect(Array.isArray(content.evidence.sources)).toBe(true);
+                // cross_analysis should be INFERRED (from multiple queries)
+                if (content.evidence.grade === 'INFERRED') {
+                    expect(content.evidence.sources.length).toBeGreaterThan(1);
+                }
+            });
+
+            it('should have evidence in system_explanation response', async () => {
+                const pluginId = Buffer.from(testWorkspaceRoot).toString('base64').substring(0, 16);
+                const dbAdapter = new DatabasePluginAdapter(testWorkspaceRoot);
+                
+                if (!dbAdapter.isAvailable()) {
+                    // Skip if plugin not available
+                    return;
+                }
+
+                const server = new UnifiedMcpServer(testWorkspaceRoot);
+                await server.initialize();
+                
+                const response = await client.sendRequest('tools/call', {
+                    name: 'system_explanation',
+                    arguments: {
+                        pluginId
+                    }
+                });
+
+                if (response.error) {
+                    // Error is acceptable if DBs/docs not available
+                    return;
+                }
+
+                expect(response.result).toBeDefined();
+                const content = JSON.parse(response.result.content[0].text);
+                expect(content).toHaveProperty('evidence');
+                expect(content.evidence).toHaveProperty('grade');
+                expect(['FACT', 'INFERRED', 'HEURISTIC']).toContain(content.evidence.grade);
+                expect(Array.isArray(content.evidence.sources)).toBe(true);
             });
         });
     });

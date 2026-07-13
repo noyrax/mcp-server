@@ -22,6 +22,7 @@ export class DatabaseTools {
     private changeApi: any;
     private crossDimensionApi: any;
     private ingestionApi: any;
+    private vectorBackendStatusApi: any;
 
     constructor(adapter: DatabasePluginAdapter) {
         this.adapter = adapter;
@@ -57,6 +58,7 @@ export class DatabaseTools {
         const changeApiModule = await import(pathToFileURL(path.join(apiPath, 'change-api.js')).href);
         const crossDimensionApiModule = await import(pathToFileURL(path.join(apiPath, 'cross-dimension-api.js')).href);
         const ingestionApiModule = await import(pathToFileURL(path.join(apiPath, 'ingestion-api.js')).href);
+        const vectorBackendStatusApiModule = await import(pathToFileURL(path.join(apiPath, 'vector-backend-status-api.js')).href);
 
         this.moduleApi = new moduleApiModule.ModuleApi(this.dbManager);
         this.symbolApi = new symbolApiModule.SymbolApi(this.dbManager);
@@ -68,13 +70,47 @@ export class DatabaseTools {
         // Initialize IngestionApi with plugin root
         const pluginRoot = path.resolve(pluginPath);
         this.ingestionApi = new ingestionApiModule.IngestionApi(this.dbManager, pluginRoot);
+        
+        // Initialize VectorBackendStatusApi
+        this.vectorBackendStatusApi = new vectorBackendStatusApiModule.VectorBackendStatusApi(this.dbManager);
     }
 
     /**
      * Query modules by file path.
      */
     public async queryModules(filePath: string, pluginId: string): Promise<any> {
-        return await this.moduleApi.getModuleByPath(filePath, pluginId);
+        const module = await this.moduleApi.getModuleByPath(filePath, pluginId);
+        
+        // Add evidence (FACT - direct DB query)
+        const evidence = {
+            grade: 'FACT' as const,
+            sources: [{
+                type: 'DB_QUERY' as const,
+                id: module?.id,
+                path: filePath,
+                metadata: { dimension: 'X', pluginId }
+            }],
+            description: 'Module data from database query'
+        };
+        
+        // Return consistent structure even if module is null
+        if (module === null) {
+            return {
+                evidence
+            };
+        }
+        
+        return {
+            ...module,
+            evidence
+        };
+    }
+
+    /**
+     * Query all modules.
+     */
+    public async queryAllModules(pluginId: string): Promise<any[]> {
+        return await this.moduleApi.getAllModules(pluginId);
     }
 
     /**
@@ -85,12 +121,55 @@ export class DatabaseTools {
         symbolId?: string;
         pluginId: string;
     }): Promise<any> {
+        let result: any;
+        let evidenceSources: Array<{ type: 'DB_QUERY'; id?: string; path?: string; metadata?: Record<string, any> }> = [];
+        
         if (args.symbolId) {
-            return await this.symbolApi.getSymbolById(args.symbolId, args.pluginId);
+            result = await this.symbolApi.getSymbolById(args.symbolId, args.pluginId);
+            evidenceSources.push({
+                type: 'DB_QUERY',
+                id: args.symbolId,
+                metadata: { dimension: 'Y', pluginId: args.pluginId, queryType: 'byId' }
+            });
         } else if (args.path) {
-            return await this.symbolApi.getSymbolsByPath(args.path, args.pluginId);
+            result = await this.symbolApi.getSymbolsByPath(args.path, args.pluginId);
+            evidenceSources.push({
+                type: 'DB_QUERY',
+                path: args.path,
+                metadata: { dimension: 'Y', pluginId: args.pluginId, queryType: 'byPath' }
+            });
         } else {
-            return await this.symbolApi.getAllSymbols(args.pluginId);
+            result = await this.symbolApi.getAllSymbols(args.pluginId);
+            evidenceSources.push({
+                type: 'DB_QUERY',
+                metadata: { dimension: 'Y', pluginId: args.pluginId, queryType: 'all' }
+            });
+        }
+        
+        // Add evidence (FACT - direct DB query)
+        const evidence = {
+            grade: 'FACT' as const,
+            sources: evidenceSources,
+            description: 'Symbol data from database query'
+        };
+        
+        // If result is array, wrap it; otherwise add evidence directly
+        if (Array.isArray(result)) {
+            return {
+                symbols: result,
+                evidence
+            };
+        } else if (result === null || result === undefined) {
+            // Return consistent structure even if result is null
+            return {
+                symbols: [],
+                evidence
+            };
+        } else {
+            return {
+                ...result,
+                evidence
+            };
         }
     }
 
@@ -102,13 +181,63 @@ export class DatabaseTools {
         toModule?: string;
         pluginId: string;
     }): Promise<any> {
+        let result: any;
+        let evidenceSources: Array<{ type: 'DB_QUERY'; path?: string; metadata?: Record<string, any> }> = [];
+        
         if (args.fromModule) {
-            return await this.dependencyApi.getDependenciesByFromModule(args.fromModule, args.pluginId);
+            result = await this.dependencyApi.getDependenciesByFromModule(args.fromModule, args.pluginId);
+            evidenceSources.push({
+                type: 'DB_QUERY',
+                path: args.fromModule,
+                metadata: { dimension: 'Z', pluginId: args.pluginId, queryType: 'fromModule' }
+            });
         } else if (args.toModule) {
-            return await this.dependencyApi.getDependenciesByToModule(args.toModule, args.pluginId);
+            result = await this.dependencyApi.getDependenciesByToModule(args.toModule, args.pluginId);
+            evidenceSources.push({
+                type: 'DB_QUERY',
+                path: args.toModule,
+                metadata: { dimension: 'Z', pluginId: args.pluginId, queryType: 'toModule' }
+            });
         } else {
-            return await this.dependencyApi.getAllDependencies(args.pluginId);
+            result = await this.dependencyApi.getAllDependencies(args.pluginId);
+            evidenceSources.push({
+                type: 'DB_QUERY',
+                metadata: { dimension: 'Z', pluginId: args.pluginId, queryType: 'all' }
+            });
         }
+        
+        // Add evidence (FACT - direct DB query)
+        const evidence = {
+            grade: 'FACT' as const,
+            sources: evidenceSources,
+            description: 'Dependency data from database query'
+        };
+        
+        // If result is array, wrap it; otherwise add evidence directly
+        if (Array.isArray(result)) {
+            return {
+                dependencies: result,
+                evidence
+            };
+        } else if (result === null || result === undefined) {
+            // Return consistent structure even if result is null
+            return {
+                dependencies: [],
+                evidence
+            };
+        } else {
+            return {
+                ...result,
+                evidence
+            };
+        }
+    }
+
+    /**
+     * Query all ADRs.
+     */
+    public async queryAllAdrs(pluginId: string): Promise<any[]> {
+        return await this.adrApi.getAllAdrs(pluginId);
     }
 
     /**
@@ -127,40 +256,158 @@ export class DatabaseTools {
             raw = normalizedRaw;
         }
 
+        let result: any;
+        let evidenceSources: Array<{ type: 'DB_QUERY'; id?: string; path?: string; metadata?: Record<string, any> }> = [];
+
         // 1) Pure ADR number ("40", "040", "001")
         if (/^\d+$/.test(raw)) {
-            return await this.adrApi.getAdrByNumber(raw, pluginId);
+            result = await this.adrApi.getAdrByNumber(raw, pluginId);
+            evidenceSources.push({
+                type: 'DB_QUERY',
+                id: `ADR-${raw}`,
+                metadata: { dimension: 'W', pluginId, queryType: 'byNumber', adrNumber: raw }
+            });
         }
-
         // 2) ADR filename that starts with a number ("040-unified-mcp-server.md", "040-unified-mcp-server")
-        const leadingNumber = raw.match(/^(\d{1,4})\b/);
-        if (leadingNumber) {
-            return await this.adrApi.getAdrByNumber(leadingNumber[1], pluginId);
-        }
-
-        // 3) ADR markdown path ("docs/adr/040-*.md") → extract ADR number and query by number.
-        const lowered = raw.toLowerCase();
-        const looksLikeAdrMarkdownPath =
-            lowered.endsWith('.md') ||
-            lowered.includes('docs/adr') ||
-            lowered.includes('/adr/') ||
-            lowered.includes('\\adr\\');
-        if (looksLikeAdrMarkdownPath) {
-            const anyNumber = raw.match(/(\d{1,4})/);
-            if (anyNumber) {
-                return await this.adrApi.getAdrByNumber(anyNumber[1], pluginId);
+        else {
+            const leadingNumber = raw.match(/^(\d{1,4})\b/);
+            if (leadingNumber) {
+                result = await this.adrApi.getAdrByNumber(leadingNumber[1], pluginId);
+                evidenceSources.push({
+                    type: 'DB_QUERY',
+                    id: `ADR-${leadingNumber[1]}`,
+                    metadata: { dimension: 'W', pluginId, queryType: 'byNumber', adrNumber: leadingNumber[1] }
+                });
+            }
+            // 3) ADR markdown path ("docs/adr/040-*.md") → extract ADR number and query by number.
+            else {
+                const lowered = raw.toLowerCase();
+                const looksLikeAdrMarkdownPath =
+                    lowered.endsWith('.md') ||
+                    lowered.includes('docs/adr') ||
+                    lowered.includes('/adr/') ||
+                    lowered.includes('\\adr\\');
+                if (looksLikeAdrMarkdownPath) {
+                    const anyNumber = raw.match(/(\d{1,4})/);
+                    if (anyNumber) {
+                        result = await this.adrApi.getAdrByNumber(anyNumber[1], pluginId);
+                        evidenceSources.push({
+                            type: 'DB_QUERY',
+                            id: `ADR-${anyNumber[1]}`,
+                            metadata: { dimension: 'W', pluginId, queryType: 'byNumber', adrNumber: anyNumber[1] }
+                        });
+                    }
+                }
+                // 4) Otherwise treat as module file path and return ADRs mapped to that file.
+                else {
+                    result = await this.adrApi.getAdrsByFilePath(raw, pluginId);
+                    evidenceSources.push({
+                        type: 'DB_QUERY',
+                        path: raw,
+                        metadata: { dimension: 'W', pluginId, queryType: 'byFilePath' }
+                    });
+                }
             }
         }
 
-        // 4) Otherwise treat as module file path and return ADRs mapped to that file.
-        return await this.adrApi.getAdrsByFilePath(raw, pluginId);
+        // Add evidence (FACT - direct DB query)
+        const evidence = {
+            grade: 'FACT' as const,
+            sources: evidenceSources,
+            description: 'ADR data from database query'
+        };
+
+        // If result is array, wrap it; otherwise add evidence directly
+        if (Array.isArray(result)) {
+            return {
+                adrs: result,
+                evidence
+            };
+        } else if (result === null || result === undefined) {
+            // Return consistent structure even if result is null
+            // For single ADR queries, return null explicitly
+            return {
+                evidence
+            };
+        } else {
+            return {
+                ...result,
+                evidence
+            };
+        }
     }
 
     /**
      * Query changes.
      */
     public async queryChanges(pluginId: string): Promise<any> {
-        return await this.changeApi.getLatestChangeReport(pluginId);
+        const changeReport = await this.changeApi.getLatestChangeReport(pluginId);
+        
+        // Add evidence (FACT - direct DB query)
+        const evidence = {
+            grade: 'FACT' as const,
+            sources: [{
+                type: 'DB_QUERY' as const,
+                metadata: { dimension: 'T', pluginId }
+            }],
+            description: 'Change report data from database query'
+        };
+        
+        // Return consistent structure even if changeReport is null
+        if (changeReport === null || changeReport === undefined) {
+            return {
+                evidence
+            };
+        }
+        
+        return {
+            ...changeReport,
+            evidence
+        };
+    }
+
+    /**
+     * Query all change reports.
+     */
+    public async queryAllChanges(pluginId: string): Promise<any[]> {
+        return await this.changeApi.getAllChangeReports(pluginId);
+    }
+
+    /**
+     * Query embeddings metadata (without vectors).
+     */
+    public async queryEmbeddings(pluginId: string): Promise<any[]> {
+        try {
+            const vDb = await this.dbManager.getDatabase('V');
+            if (!vDb) {
+                return [];
+            }
+
+            // Dynamically import EmbeddingRepository
+            const pluginPath = this.adapter.getPluginPath();
+            if (!pluginPath) {
+                return [];
+            }
+
+            const embeddingRepoPath = path.join(pluginPath, 'out', 'repositories', 'embedding-repository.js');
+            const embeddingRepoModule = await import(pathToFileURL(embeddingRepoPath).href);
+            const embeddingRepo = new embeddingRepoModule.EmbeddingRepository(vDb);
+            
+            // Get all embeddings
+            const allEmbeddings = await embeddingRepo.getAll(pluginId);
+            
+            // Remove embedding_vector from metadata (too large for snapshot)
+            return allEmbeddings.map((emb: any) => {
+                const { embedding_vector, ...metadata } = emb;
+                return {
+                    ...metadata,
+                    has_vector: embedding_vector ? true : false,
+                    vector_size: embedding_vector ? embedding_vector.length : 0
+                };
+            });
+        } catch (error) {
+            return [];
+        }
     }
 
     /**
@@ -169,7 +416,30 @@ export class DatabaseTools {
     public async crossAnalysis(filePath: string, pluginId: string): Promise<any> {
         const adrs = await this.crossDimensionApi.getAdrsForFilePath(filePath, pluginId);
         const symbols = await this.crossDimensionApi.getSymbolsForModule(filePath, pluginId);
-        return { adrs, symbols };
+        
+        // Add evidence (INFERRED - from multiple DB queries)
+        const evidence = {
+            grade: 'INFERRED' as const,
+            sources: [
+                {
+                    type: 'DB_QUERY' as const,
+                    path: filePath,
+                    metadata: { dimension: 'W', pluginId, queryType: 'adrsForFilePath' }
+                },
+                {
+                    type: 'DB_QUERY' as const,
+                    path: filePath,
+                    metadata: { dimension: 'Y', pluginId, queryType: 'symbolsForModule' }
+                }
+            ],
+            description: 'Cross-dimension analysis derived from multiple database queries (ADRs and symbols)'
+        };
+        
+        return {
+            adrs,
+            symbols,
+            evidence
+        };
     }
 
     /**
@@ -189,11 +459,40 @@ export class DatabaseTools {
         const semanticDiscoveryPath = path.join(pluginPath, 'out', 'mcp', 'tools', 'semantic-discovery.js');
         const semanticDiscoveryModule = await import(pathToFileURL(semanticDiscoveryPath).href);
         
-        return await semanticDiscoveryModule.executeSemanticDiscovery(
+        const resultStr = await semanticDiscoveryModule.executeSemanticDiscovery(
             args,
             this.dbManager,
             this.idMapper
         );
+        
+        // Parse result (it's a JSON string)
+        const result = JSON.parse(resultStr);
+        
+        // Determine evidence grade based on mode
+        const isFallback = result.mode === 'fallback';
+        const evidenceGrade: 'FACT' | 'INFERRED' = isFallback ? 'INFERRED' : 'FACT';
+        const evidence = {
+            grade: evidenceGrade,
+            sources: [{
+                type: 'DB_QUERY' as const,
+                metadata: {
+                    dimension: 'V',
+                    pluginId: args.pluginId,
+                    queryType: 'semantic_discovery',
+                    query: args.query,
+                    mode: result.mode,
+                    reason_code: result.reason_code
+                }
+            }],
+            description: isFallback
+                ? 'Semantic discovery in fallback mode (vector backend unavailable)'
+                : 'Semantic discovery from vector database query'
+        };
+        
+        return {
+            ...result,
+            evidence
+        };
     }
 
     /**
@@ -208,10 +507,43 @@ export class DatabaseTools {
         const systemExplanationPath = path.join(pluginPath, 'out', 'mcp', 'tools', 'system-explanation.js');
         const systemExplanationModule = await import(pathToFileURL(systemExplanationPath).href);
         
-        return await systemExplanationModule.executeSystemExplanation(
+        // executeSystemExplanation already returns JSON string (via JSON.stringify)
+        const resultStr = await systemExplanationModule.executeSystemExplanation(
             { pluginId },
             this.dbManager
         );
+        
+        // Parse result to add evidence
+        const result = JSON.parse(resultStr);
+        
+        // Add evidence (INFERRED - from multiple DB queries and system metadata)
+        const evidence = {
+            grade: 'INFERRED' as const,
+            sources: [
+                {
+                    type: 'DB_QUERY' as const,
+                    metadata: { dimension: 'X', pluginId, queryType: 'modules' }
+                },
+                {
+                    type: 'DB_QUERY' as const,
+                    metadata: { dimension: 'W', pluginId, queryType: 'adrs' }
+                },
+                {
+                    type: 'SYSTEM_METADATA' as const,
+                    metadata: { pluginId }
+                }
+            ],
+            description: 'System explanation derived from multiple database queries and system metadata'
+        };
+        
+        // Add evidence to result (if it's an object) or wrap it
+        const resultWithEvidence = {
+            ...result,
+            evidence
+        };
+        
+        // Return as object (consistent with other databaseTools methods)
+        return resultWithEvidence;
     }
 
     /**
@@ -226,10 +558,14 @@ export class DatabaseTools {
         const learningPathPath = path.join(pluginPath, 'out', 'mcp', 'tools', 'learning-path.js');
         const learningPathModule = await import(pathToFileURL(learningPathPath).href);
         
-        return await learningPathModule.executeLearningPath(
+        // executeLearningPath already returns JSON string (via JSON.stringify)
+        const resultStr = await learningPathModule.executeLearningPath(
             { topic, pluginId },
             this.dbManager
         );
+        
+        // Parse JSON string and return as object (consistent with other databaseTools methods)
+        return JSON.parse(resultStr);
     }
 
     /**
@@ -244,10 +580,14 @@ export class DatabaseTools {
         const bootstrapPath = path.join(pluginPath, 'out', 'mcp', 'tools', 'bootstrap.js');
         const bootstrapModule = await import(pathToFileURL(bootstrapPath).href);
         
-        return await bootstrapModule.executeBootstrap(
+        // executeBootstrap already returns JSON string (via JSON.stringify)
+        const resultStr = await bootstrapModule.executeBootstrap(
             { pluginId },
             this.dbManager
         );
+        
+        // Parse JSON string and return as object (consistent with other databaseTools methods)
+        return JSON.parse(resultStr);
     }
 
     /**
@@ -285,7 +625,33 @@ export class DatabaseTools {
             this.adapter.getWorkspaceRoot()
         );
         
-        return await tool.execute(args);
+        const resultStr = await tool.execute(args);
+        const result = JSON.parse(resultStr);
+        
+        // Add evidence (INFERRED - from multiple DB queries)
+        const evidence = {
+            grade: 'INFERRED' as const,
+            sources: [
+                {
+                    type: 'DB_QUERY' as const,
+                    metadata: { dimension: 'X', pluginId: args.pluginId, queryType: 'modules' }
+                },
+                {
+                    type: 'DB_QUERY' as const,
+                    metadata: { dimension: 'Z', pluginId: args.pluginId, queryType: 'dependencies' }
+                },
+                {
+                    type: 'DB_QUERY' as const,
+                    metadata: { dimension: 'W', pluginId: args.pluginId, queryType: 'adrs' }
+                }
+            ],
+            description: 'Gap analysis derived from multiple database queries (modules, dependencies, and ADRs)'
+        };
+        
+        return {
+            ...result,
+            evidence
+        };
     }
 
     /**
@@ -300,7 +666,7 @@ export class DatabaseTools {
         dryRun?: boolean;
         useLLM?: boolean;
         llmModel?: string;
-    }): Promise<string> {
+    }): Promise<any> {
         const pluginPath = this.adapter.getPluginPath();
         if (!pluginPath) {
             throw new Error('Plugin path not found');
@@ -316,7 +682,10 @@ export class DatabaseTools {
             this.adapter.getWorkspaceRoot()
         );
 
-        return await tool.execute(args);
+        const resultStr = await tool.execute(args);
+        
+        // Parse JSON string and return as object (consistent with other databaseTools methods)
+        return JSON.parse(resultStr);
     }
 
     /**
@@ -380,8 +749,12 @@ export class DatabaseTools {
 
     /**
      * Run ingestion.
+     * 
+     * @param pluginId Plugin ID
+     * @param full Whether to run full ingestion (default: true)
+     * @param cleanup Whether to cleanup old databases with different plugin ID (default: false, auto-cleanup on --full if mismatch detected)
      */
-    public async runIngestion(pluginId: string, full: boolean = true): Promise<any> {
+    public async runIngestion(pluginId: string, full: boolean = true, cleanup: boolean = false): Promise<any> {
         const pluginPath = this.adapter.getPluginPath();
         if (!pluginPath) {
             throw new Error('Plugin path not found');
@@ -397,7 +770,8 @@ export class DatabaseTools {
 
         const workspaceRoot = this.adapter.getWorkspaceRoot();
         const fullFlag = full ? ' --full' : '';
-        const command = `node "${ingestCliPath}" "${workspaceRoot}"${fullFlag}`;
+        const cleanupFlag = cleanup ? ' --cleanup' : '';
+        const command = `node "${ingestCliPath}" "${workspaceRoot}"${fullFlag}${cleanupFlag}`;
 
         try {
             const { stdout, stderr } = await execAsync(command, {
@@ -433,6 +807,76 @@ export class DatabaseTools {
             throw new Error('IngestionApi not initialized. Call initialize() first.');
         }
         return await this.ingestionApi.checkIngestionStatus();
+    }
+
+    /**
+     * Get vector backend status.
+     */
+    public async getVectorBackendStatus(): Promise<any> {
+        if (!this.vectorBackendStatusApi) {
+            throw new Error('VectorBackendStatusApi not initialized. Call initialize() first.');
+        }
+        return await this.vectorBackendStatusApi.getVectorBackendStatus();
+    }
+
+    /**
+     * Healthcheck vector backend.
+     */
+    public async healthcheckVectorBackend(): Promise<any> {
+        if (!this.vectorBackendStatusApi) {
+            throw new Error('VectorBackendStatusApi not initialized. Call initialize() first.');
+        }
+        return await this.vectorBackendStatusApi.healthcheckVectorBackend();
+    }
+
+    /**
+     * Get source access contract.
+     */
+    public async sourceAccessContract(args?: { workspaceRoot?: string }): Promise<any> {
+        const pluginPath = this.adapter.getPluginPath();
+        if (!pluginPath) {
+            throw new Error('Plugin path not found');
+        }
+
+        const sourceAccessContractPath = path.join(pluginPath, 'out', 'mcp', 'tools', 'source-access-contract.js');
+        const sourceAccessContractModule = await import(pathToFileURL(sourceAccessContractPath).href);
+        
+        return await sourceAccessContractModule.executeSourceAccessContract(
+            args || {},
+            this.dbManager
+        );
+    }
+
+    /**
+     * Fetch source code snippet.
+     */
+    public async sourceSnippet(args: {
+        symbol_id?: string;
+        file_path?: string;
+        start_line?: number;
+        end_line?: number;
+        content_hash?: string;
+        include_context?: boolean;
+        context_lines?: number;
+        verify_hash?: boolean;
+        pluginId: string;
+        workspaceRoot?: string;
+    }): Promise<any> {
+        const pluginPath = this.adapter.getPluginPath();
+        if (!pluginPath) {
+            throw new Error('Plugin path not found');
+        }
+
+        const sourceSnippetPath = path.join(pluginPath, 'out', 'mcp', 'tools', 'source-snippet.js');
+        const sourceSnippetModule = await import(pathToFileURL(sourceSnippetPath).href);
+        
+        // Ensure workspaceRoot is passed (use adapter's workspace root if not provided)
+        const workspaceRoot = args.workspaceRoot || this.adapter.getWorkspaceRoot();
+        
+        return await sourceSnippetModule.executeSourceSnippet(
+            { ...args, workspaceRoot },
+            this.dbManager
+        );
     }
 }
 

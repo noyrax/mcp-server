@@ -622,6 +622,45 @@ This tool:
 
 ---
 
+### workflow/boundary_report
+
+Get system boundary report: workspace root detection, plugin roots, exclude directories, path normalization rules, and boundary validation.
+
+This tool helps identify workspace boundaries for foreign codebases by:
+- Detecting workspace root (normalized, canonical form)
+- Finding plugin roots (multiple plugins in Monorepo)
+- Detecting exclude directories (node_modules, dist, .git, etc.)
+- Providing path normalization rules (forward-slashes, case-sensitive detection)
+- Reading ignore rules (.gitignore, .cursorignore)
+- Validating boundary (checks if pluginId matches workspace root)
+
+**Parameters:**
+- `pluginId` (string, optional): Plugin ID for validation
+- `workspaceRoot` (string, optional): Override workspace root
+
+**Returns:**
+- `workspace_root`: Normalized, canonical form
+- `detected_plugin_roots`: Multiple plugins in Monorepo
+- `exclude_dirs`: node_modules, dist, etc.
+- `path_normalization`: Separator, case-sensitive, canonical form
+- `ignore_rules`: .gitignore and .cursorignore rules
+- `boundary_validation`: Plugin ID match, issues
+- `evidence`: FACT evidence from filesystem reads
+
+**Example:**
+```json
+{
+  "name": "workflow_boundary_report",
+  "arguments": {
+    "pluginId": "workspace"
+  }
+}
+```
+
+**Use Case:** Identify workspace boundaries for foreign codebases, validate workspace root, detect Monorepo structure.
+
+---
+
 ### workflow/onboard
 
 Onboard a foreign codebase and return a deterministic onboarding report.
@@ -751,6 +790,54 @@ Common error codes:
 - `DOCS_NOT_FOUND`: `docs/` directory missing
 - `DATABASE_NOT_FOUND`: SQLite databases missing
 - `INVALID_PARAMETERS`: Missing or invalid parameters
+
+---
+
+### explain_tools
+
+**NEW:** Get comprehensive guide to all available tools with explanations, workflow patterns, examples, and recommendations.
+
+**Parameters:**
+- `category` (string, optional): Filter tools by category (`database`, `validation`, `orchestration`, `all`)
+- `toolName` (string, optional): Get detailed information for a specific tool
+- `useCase` (string, optional): Get tool recommendations for a use case (e.g., `"understand module"`, `"find code"`, `"validate docs"`)
+
+**Returns:**
+- Summary with total tools and category counts
+- Tools organized by category with detailed information (use cases, parameters, examples, related tools)
+- Workflow patterns showing how to combine tools
+- Tool recommendations for specified use case (if provided)
+
+**Example:**
+```json
+{
+  "name": "explain_tools"
+}
+```
+
+**Example (with category filter):**
+```json
+{
+  "name": "explain_tools",
+  "arguments": {
+    "category": "database"
+  }
+}
+```
+
+**Example (with use case):**
+```json
+{
+  "name": "explain_tools",
+  "arguments": {
+    "useCase": "understand module"
+  }
+}
+```
+
+**Use Case:** Help AI agents understand which tools to use and how to combine them effectively.
+
+---
 
 ## See Also
 

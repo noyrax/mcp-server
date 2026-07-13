@@ -5,10 +5,10 @@ import { createRequire } from 'module';
 import { execSync } from 'child_process';
 
 /**
- * Adapter for 5D Database Plugin APIs.
- * Provides access to database functionality without direct imports.
+ * Adapter for Agent-5D-System Plugin APIs.
+ * Provides access to agent database functionality without direct imports.
  */
-export class DatabasePluginAdapter {
+export class AgentPluginAdapter {
     private workspaceRoot: string;
     private pluginPath?: string;
 
@@ -18,13 +18,13 @@ export class DatabasePluginAdapter {
     }
 
     /**
-     * Finds 5D Database Plugin path.
+     * Finds Agent-5D-System Plugin path.
      */
     private findPluginPath(): string | undefined {
         // Allow explicit override (useful in foreign systems / non-standard layouts)
         const envOverrides = [
-            process.env.NOYRAX_5D_DATABASE_PLUGIN_PATH,
-            process.env.NOYRAX_DATABASE_PLUGIN_PATH
+            process.env.NOYRAX_AGENT_5D_SYSTEM_PATH,
+            process.env.NOYRAX_AGENT_PLUGIN_PATH
         ]
             .map((v) => (typeof v === 'string' ? v.trim() : ''))
             .filter((v) => v.length > 0);
@@ -39,7 +39,7 @@ export class DatabasePluginAdapter {
         const findInNodeModulesUpwards = (startDir: string, maxDepth: number = 6): string | undefined => {
             let currentDir = path.resolve(startDir);
             for (let depth = 0; depth <= maxDepth; depth++) {
-                const scoped = path.join(currentDir, 'node_modules', '@noyrax', '5d-database-plugin');
+                const scoped = path.join(currentDir, 'node_modules', '@noyrax', 'agent-5d-system');
                 if (fs.existsSync(scoped) && fs.existsSync(path.join(scoped, 'package.json'))) {
                     return scoped;
                 }
@@ -53,9 +53,9 @@ export class DatabasePluginAdapter {
         };
 
         const possiblePaths = [
-            path.join(this.workspaceRoot, '5d-database-plugin'),
-            path.join(this.workspaceRoot, '..', '5d-database-plugin'),
-            path.join(process.cwd(), '5d-database-plugin')
+            path.join(this.workspaceRoot, 'agent-5d-system'),
+            path.join(this.workspaceRoot, '..', 'agent-5d-system'),
+            path.join(process.cwd(), 'agent-5d-system')
         ];
 
         for (const pluginPath of possiblePaths) {
@@ -75,7 +75,7 @@ export class DatabasePluginAdapter {
             const require = createRequire(import.meta.url);
             // Try resolving relative to workspace root first (if installed in project)
             try {
-                const pkgJsonPath = require.resolve('@noyrax/5d-database-plugin/package.json', {
+                const pkgJsonPath = require.resolve('@noyrax/agent-5d-system/package.json', {
                     paths: [this.workspaceRoot, process.cwd()]
                 });
                 return path.dirname(pkgJsonPath);
@@ -84,7 +84,7 @@ export class DatabasePluginAdapter {
             }
             
             // Try default resolution (relative to this file)
-            const pkgJsonPath = require.resolve('@noyrax/5d-database-plugin/package.json');
+            const pkgJsonPath = require.resolve('@noyrax/agent-5d-system/package.json');
             return path.dirname(pkgJsonPath);
         } catch {
             // ignore
@@ -93,7 +93,7 @@ export class DatabasePluginAdapter {
         // Fallback 3: Check global npm installation
         try {
             const globalNodeModules = execSync('npm root -g', { encoding: 'utf-8' }).trim();
-            const globalPluginPath = path.join(globalNodeModules, '@noyrax', '5d-database-plugin');
+            const globalPluginPath = path.join(globalNodeModules, '@noyrax', 'agent-5d-system');
             if (fs.existsSync(globalPluginPath) && fs.existsSync(path.join(globalPluginPath, 'package.json'))) {
                 return globalPluginPath;
             }
@@ -104,11 +104,11 @@ export class DatabasePluginAdapter {
         // Fallback 4: Common global npm paths (Windows and Unix)
         const commonGlobalPaths = [
             // Windows
-            path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@noyrax', '5d-database-plugin'),
+            path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@noyrax', 'agent-5d-system'),
             // Unix/Mac
-            path.join('/usr', 'local', 'lib', 'node_modules', '@noyrax', '5d-database-plugin'),
-            path.join(process.env.HOME || '', '.npm-global', 'node_modules', '@noyrax', '5d-database-plugin'),
-            path.join(process.env.HOME || '', '.nvm', 'versions', 'node', 'v*', 'lib', 'node_modules', '@noyrax', '5d-database-plugin')
+            path.join('/usr', 'local', 'lib', 'node_modules', '@noyrax', 'agent-5d-system'),
+            path.join(process.env.HOME || '', '.npm-global', 'node_modules', '@noyrax', 'agent-5d-system'),
+            path.join(process.env.HOME || '', '.nvm', 'versions', 'node', 'v*', 'lib', 'node_modules', '@noyrax', 'agent-5d-system')
         ];
 
         for (const globalPath of commonGlobalPaths) {
@@ -121,7 +121,7 @@ export class DatabasePluginAdapter {
     }
 
     /**
-     * Checks if 5D Database Plugin is available.
+     * Checks if Agent-5D-System Plugin is available.
      */
     public isAvailable(): boolean {
         if (!this.pluginPath) {
@@ -134,7 +134,7 @@ export class DatabasePluginAdapter {
             return true;
         }
         
-        // Check if out/core/multi-db-manager.js exists (alternative path)
+        // Check if out/core/agent-multi-db-manager.js exists (alternative path)
         const corePath = path.join(this.pluginPath, 'out', 'core', 'multi-db-manager.js');
         if (fs.existsSync(corePath)) {
             return true;
@@ -189,12 +189,12 @@ export class DatabasePluginAdapter {
     }
 
     /**
-     * Dynamically imports and returns MultiDbManager.
+     * Dynamically imports and returns AgentMultiDbManager.
      * Uses dynamic import to avoid hard dependencies.
      */
-    public async getMultiDbManager(): Promise<any> {
+    public async getAgentMultiDbManager(): Promise<any> {
         if (!this.pluginPath) {
-            throw new Error('5D Database Plugin not found');
+            throw new Error('Agent-5D-System Plugin not found');
         }
 
         const apiPath = path.join(this.pluginPath, 'out', 'api', 'index.js');
@@ -203,28 +203,40 @@ export class DatabasePluginAdapter {
             const altPath = path.join(this.pluginPath, 'out', 'core', 'multi-db-manager.js');
             if (fs.existsSync(altPath)) {
                 const module = await import(pathToFileURL(altPath).href);
-                return module.MultiDbManager;
+                return module.AgentMultiDbManager;
             }
-            throw new Error(`5D Database Plugin API not found at ${apiPath}`);
+            throw new Error(`Agent-5D-System Plugin API not found at ${apiPath}`);
         }
 
+        // Try to import AgentMultiDbManager from the compiled output
         const module = await import(pathToFileURL(apiPath).href);
-        return module.MultiDbManager;
+        // Check if AgentMultiDbManager is exported directly or from core
+        if (module.AgentMultiDbManager) {
+            return module.AgentMultiDbManager;
+        }
+        
+        // Fallback: try core path
+        const corePath = path.join(this.pluginPath, 'out', 'core', 'multi-db-manager.js');
+        if (fs.existsSync(corePath)) {
+            const coreModule = await import(pathToFileURL(corePath).href);
+            return coreModule.AgentMultiDbManager;
+        }
+        
+        throw new Error(`AgentMultiDbManager not found in Agent-5D-System Plugin`);
     }
 
     /**
-     * Creates a MultiDbManager instance.
+     * Creates an AgentMultiDbManager instance.
      */
-    public async createMultiDbManager(): Promise<any> {
-        const MultiDbManager = await this.getMultiDbManager();
-        return new MultiDbManager(this.workspaceRoot);
+    public async createAgentMultiDbManager(): Promise<any> {
+        const AgentMultiDbManager = await this.getAgentMultiDbManager();
+        return new AgentMultiDbManager(this.workspaceRoot);
     }
 
     /**
-     * Gets the database plugin workspace root.
+     * Gets the agent plugin workspace root.
      */
     public getWorkspaceRoot(): string {
         return this.workspaceRoot;
     }
 }
-

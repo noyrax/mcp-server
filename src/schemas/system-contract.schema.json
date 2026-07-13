@@ -1,0 +1,347 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "System Contract Schema",
+  "description": "Integration Contract for Noyrax Portable System Understanding",
+  "type": "object",
+  "required": [
+    "system_id",
+    "contract_version",
+    "generated_at",
+    "dimensions",
+    "capabilities",
+    "runtime_dependencies"
+  ],
+  "properties": {
+    "system_id": {
+      "type": "string",
+      "description": "Stable system identifier (workspace hash)"
+    },
+    "contract_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(-.*)?$",
+      "description": "Contract version (semver)"
+    },
+    "min_supported_contract_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(-.*)?$",
+      "description": "Minimum supported contract version"
+    },
+    "breaking_changes_policy": {
+      "type": "object",
+      "properties": {
+        "policy": {
+          "type": "string",
+          "enum": ["NONE", "MINOR", "MAJOR"],
+          "description": "Breaking changes policy"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description"
+        }
+      },
+      "required": ["policy"]
+    },
+    "compatibility": {
+      "type": "object",
+      "description": "Compatibility information per version",
+      "patternProperties": {
+        "^\\d+\\.\\d+\\.\\d+(-.*)?$": {
+          "type": "object",
+          "properties": {
+            "required_fields": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "optional_fields": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "deprecated_fields": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when contract was generated"
+    },
+    "workspace_root": {
+      "type": "string",
+      "description": "Workspace root path (canonical)"
+    },
+    "version": {
+      "type": "string",
+      "description": "System version (from package.json)"
+    },
+    "plugins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "version": { "type": "string" },
+          "path": { "type": "string" }
+        },
+        "required": ["name", "version"]
+      }
+    },
+    "dimensions": {
+      "type": "object",
+      "description": "5D + V dimension descriptions",
+      "properties": {
+        "X": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "description": { "type": "string" }
+          }
+        },
+        "Y": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "description": { "type": "string" }
+          }
+        },
+        "Z": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "description": { "type": "string" }
+          }
+        },
+        "W": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "description": { "type": "string" }
+          }
+        },
+        "T": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "description": { "type": "string" }
+          }
+        },
+        "V": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "description": { "type": "string" }
+          }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "description": "Capabilities matrix",
+      "properties": {
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "version": { "type": "string" },
+              "description": { "type": "string" },
+              "input_schema": { "type": "object" },
+              "output_schema": { "type": "object" },
+              "required_params": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "optional_params": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "required": ["name", "description"]
+          }
+        },
+        "feature_flags": {
+          "type": "object",
+          "properties": {
+            "v_dimension_active": { "type": "boolean" },
+            "snapshots_supported": { "type": "boolean" },
+            "evidence_active": { "type": "boolean" },
+            "delta_snapshots_supported": { "type": "boolean" }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "max_result_size": { "type": "number" },
+            "supported_dimensions": {
+              "type": "array",
+              "items": { "type": "string", "enum": ["X", "Y", "Z", "W", "T", "V"] }
+            },
+            "required_backends": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      },
+      "required": ["tools", "feature_flags", "limits"]
+    },
+    "public_api": {
+      "type": "object",
+      "description": "Public API exports (from package.json)",
+      "patternProperties": {
+        ".*": {
+          "type": "object",
+          "properties": {
+            "import": { "type": "string" },
+            "types": { "type": "string" }
+          }
+        }
+      }
+    },
+    "runtime_dependencies": {
+      "type": "object",
+      "description": "Runtime dependencies status",
+      "properties": {
+        "docs_directory": {
+          "type": "object",
+          "properties": {
+            "exists": { "type": "boolean" },
+            "path": { "type": "string" }
+          }
+        },
+        "databases": {
+          "type": "object",
+          "properties": {
+            "modules_db": { "type": "boolean" },
+            "symbols_db": { "type": "boolean" },
+            "dependencies_db": { "type": "boolean" },
+            "adrs_db": { "type": "boolean" },
+            "changes_db": { "type": "boolean" },
+            "vectors_db": { "type": "boolean" }
+          }
+        },
+        "vector_backend": {
+          "type": "object",
+          "properties": {
+            "backend": { "type": "string", "enum": ["chromadb", "vss", "fallback", "none"] },
+            "mode": { "type": "string", "enum": ["chromadb", "vss", "fallback"] },
+            "expected_available": { "type": "boolean" },
+            "reachable": { "type": "boolean" },
+            "fallback": { "type": "boolean" },
+            "reason_code": { "type": "string" }
+          }
+        },
+        "embeddings": {
+          "type": "object",
+          "properties": {
+            "available": { "type": "boolean" },
+            "count": { "type": "number" }
+          }
+        }
+      }
+    },
+    "policies": {
+      "type": "object",
+      "description": "System policies",
+      "properties": {
+        "soft_delete": { "type": "boolean" },
+        "active_only_default": { "type": "boolean" }
+      }
+    },
+    "canonical_identifiers": {
+      "type": "object",
+      "description": "Canonical identifier rules",
+      "properties": {
+        "plugin_id": {
+          "type": "object",
+          "properties": {
+            "algorithm": { "type": "string" },
+            "format": { "type": "string" }
+          }
+        },
+        "workspace_id": {
+          "type": "object",
+          "properties": {
+            "algorithm": { "type": "string" },
+            "format": { "type": "string" }
+          }
+        },
+        "entity_id_mapping": {
+          "type": "object",
+          "description": "Entity ID mapping rules"
+        },
+        "normalization_rules": {
+          "type": "object",
+          "properties": {
+            "path_separator": { "type": "string" },
+            "case_sensitive": { "type": "boolean" },
+            "hash_algorithm": { "type": "string" }
+          }
+        }
+      }
+    },
+    "fallback_policy": {
+      "type": "object",
+      "description": "Fallback policy declaration",
+      "properties": {
+        "activation_conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "reason_code": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "quality_degradation": {
+          "type": "object",
+          "properties": {
+            "description": { "type": "string" },
+            "impact": { "type": "string" }
+          }
+        },
+        "marking": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "format": { "type": "string" }
+          }
+        }
+      }
+    },
+    "import_map": {
+      "type": "object",
+      "description": "Public import map (optional, can be separate)",
+      "properties": {
+        "public_only": { "type": "boolean" },
+        "package_name_mapping": { "type": "object" },
+        "recommended_import_paths": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "legacy_import_paths": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "description": "Sources used to generate this contract",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string" },
+          "path": { "type": "string" },
+          "hash": { "type": "string" }
+        }
+      }
+    }
+  }
+}
+
