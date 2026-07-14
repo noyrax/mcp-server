@@ -73,6 +73,18 @@ export class DatabaseTools {
         
         // Initialize VectorBackendStatusApi
         this.vectorBackendStatusApi = new vectorBackendStatusApiModule.VectorBackendStatusApi(this.dbManager);
+
+        // Best-effort: open the V (vector) dimension so that vector_backend_status
+        // reports the real backend/embedding state. Without this the V-dimension is
+        // never opened in the MCP process and status wrongly reads "NOT_INSTALLED"
+        // (which actually means "V not opened here", not "package missing").
+        try {
+            if (typeof this.dbManager?.getDatabase === 'function') {
+                await this.dbManager.getDatabase('V');
+            }
+        } catch {
+            // Leave V unopened; vector_backend_status will surface the concrete reason.
+        }
     }
 
     /**

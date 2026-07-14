@@ -477,21 +477,30 @@ export class OrchestrationTools {
             });
         }
 
-        // Embeddings are OPTIONAL for basic navigation, but improve semantic search quality.
+        // Embeddings are OPTIONAL for basic navigation, but REQUIRED for semantic search.
+        // IMPORTANT: a vectors.db file existing does NOT mean embeddings are populated —
+        // the file is created when the V-dimension is opened, regardless of row count.
+        // Call `vector_backend_status` for the authoritative embedding count/backend state
+        // before relying on semantic_discovery.
+        const hasVoyageKey = typeof process.env.VOYAGE_API_KEY === 'string' && process.env.VOYAGE_API_KEY.length > 0;
+        const hasOpenAIKey = typeof process.env.OPENAI_API_KEY === 'string' && process.env.OPENAI_API_KEY.length > 0;
+        const hasAnthropicKey = typeof process.env.ANTHROPIC_API_KEY === 'string' && process.env.ANTHROPIC_API_KEY.length > 0;
         const embeddingGuidance = {
             optional: true,
             present: status.embeddings?.exists === true,
             message:
                 status.embeddings?.exists === true
-                    ? 'Embeddings database file exists (semantic search should be available).'
-                    : 'Embeddings database file not found. Semantic search may be unavailable or degraded until embeddings are generated.',
+                    ? 'A vectors.db file exists, but this does NOT guarantee embeddings are populated. Call vector_backend_status for the authoritative embedding count before relying on semantic_discovery.'
+                    : 'No vectors.db found. Semantic search is unavailable until embeddings are generated (run an ingest with a working embedding provider).',
             hints: [
-                'Ensure OPENAI_API_KEY is set (commonly via a .env file in the workspace root).',
-                'On Windows, Semantic Brain may use ChromaDB; see CHROMADB_SETUP.md in the 5d-database-plugin for setup.'
+                'Embeddings use Voyage AI by default — set VOYAGE_API_KEY in the workspace .env.',
+                'A Voyage account without a billing method is throttled to ~3 req/min and 10K TPM, so bulk embedding fails with HTTP 429 and 0 embeddings are generated. Add a billing method (the free 200M tokens still apply) or switch provider.',
+                'On Windows the optimized sqlite-vss backend is unavailable; the system falls back to SQLite cosine similarity, which still requires populated embeddings.'
             ],
             env: {
-                hasOpenAIKey: typeof process.env.OPENAI_API_KEY === 'string' && process.env.OPENAI_API_KEY.length > 0,
-                hasAnthropicKey: typeof process.env.ANTHROPIC_API_KEY === 'string' && process.env.ANTHROPIC_API_KEY.length > 0,
+                hasVoyageKey,
+                hasOpenAIKey,
+                hasAnthropicKey,
                 hasOpenAIModel: typeof process.env.OPENAI_MODEL === 'string' && process.env.OPENAI_MODEL.length > 0,
                 hasAnthropicModel: typeof process.env.ANTHROPIC_MODEL === 'string' && process.env.ANTHROPIC_MODEL.length > 0
             }
