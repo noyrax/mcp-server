@@ -204,12 +204,14 @@ export class UnifiedMcpServer {
                     },
                     {
                         name: 'query_symbols',
-                        description: 'Query symbols by path or symbol ID',
+                        description: 'Query symbols by symbol ID, file path, or name. Use "name" when the file path is unknown (e.g. "where is VectorDatabaseFactory?") - exact matches win, otherwise prefix search. Precedence: symbolId > path > name; without any of them all symbols are returned.',
                         inputSchema: {
                             type: 'object' as const,
                             properties: {
-                                path: { type: 'string' as const },
-                                symbolId: { type: 'string' as const },
+                                path: { type: 'string' as const, description: 'Repository-relative file path' },
+                                symbolId: { type: 'string' as const, description: 'External symbol ID (ts://...)' },
+                                name: { type: 'string' as const, description: 'Symbol name, e.g. "VectorDatabaseFactory" or "VectorDatabaseFactory.create"' },
+                                limit: { type: 'number' as const, description: 'Max results for name search (default 50)' },
                                 pluginId: { type: 'string' as const }
                             },
                             required: ['pluginId']
@@ -1140,10 +1142,28 @@ export class UnifiedMcpServer {
                             const validateResult = await this.validationTools.runValidate(args);
                             return { content: [{ type: 'text', text: JSON.stringify(validateResult, null, 2) }] };
 
-                        case 'validation_runDriftCheck':
-                            // Local function - doesn't require plugin availability
-                            const driftResult = await this.validationTools.runDriftCheck(args);
+                        case 'validation_runDriftCheck': {
+                            // Local function - doesn't require plugin availability.
+                            // Der Indexstand kommt aus der X-Dimension; ohne ihn kann die
+                            // Aktualitätsprüfung nicht laufen und das Ergebnis wird
+                            // bewusst als "unknown" statt als "clean" gemeldet.
+                            let indexedModules: Array<{ file_path: string; source_hash: string | null }> | undefined;
+                            try {
+                                if (this.databaseTools) {
+                                    const all = await this.databaseTools.queryAllModules(this.resolvePluginId(args.pluginId));
+                                    indexedModules = (all || []).map((m: any) => ({
+                                        file_path: m.file_path,
+                                        source_hash: m.source_hash ?? null
+                                    }));
+                                }
+                            } catch (error) {
+                                // Kein stiller Fallback auf "clean": indexedModules bleibt
+                                // undefined, der Drift-Check meldet das als unknown.
+                                console.error('[MCP] Drift check: could not read index snapshot:', error);
+                            }
+                            const driftResult = await this.validationTools.runDriftCheck({ ...args, modules: indexedModules });
                             return { content: [{ type: 'text', text: JSON.stringify(driftResult, null, 2) }] };
+                        }
 
                         case 'validation_analyzeImpact':
                             // Local function - doesn't require plugin availability

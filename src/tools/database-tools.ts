@@ -73,18 +73,6 @@ export class DatabaseTools {
         
         // Initialize VectorBackendStatusApi
         this.vectorBackendStatusApi = new vectorBackendStatusApiModule.VectorBackendStatusApi(this.dbManager);
-
-        // Best-effort: open the V (vector) dimension so that vector_backend_status
-        // reports the real backend/embedding state. Without this the V-dimension is
-        // never opened in the MCP process and status wrongly reads "NOT_INSTALLED"
-        // (which actually means "V not opened here", not "package missing").
-        try {
-            if (typeof this.dbManager?.getDatabase === 'function') {
-                await this.dbManager.getDatabase('V');
-            }
-        } catch {
-            // Leave V unopened; vector_backend_status will surface the concrete reason.
-        }
     }
 
     /**
@@ -126,11 +114,13 @@ export class DatabaseTools {
     }
 
     /**
-     * Query symbols by path or symbol ID.
+     * Query symbols by path, symbol ID, or name.
      */
     public async querySymbols(args: {
         path?: string;
         symbolId?: string;
+        name?: string;
+        limit?: number;
         pluginId: string;
     }): Promise<any> {
         let result: any;
@@ -149,6 +139,12 @@ export class DatabaseTools {
                 type: 'DB_QUERY',
                 path: args.path,
                 metadata: { dimension: 'Y', pluginId: args.pluginId, queryType: 'byPath' }
+            });
+        } else if (args.name) {
+            result = await this.symbolApi.getSymbolsByName(args.name, args.pluginId, args.limit);
+            evidenceSources.push({
+                type: 'DB_QUERY',
+                metadata: { dimension: 'Y', pluginId: args.pluginId, queryType: 'byName', name: args.name }
             });
         } else {
             result = await this.symbolApi.getAllSymbols(args.pluginId);

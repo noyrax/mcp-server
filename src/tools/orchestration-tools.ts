@@ -203,11 +203,20 @@ export class OrchestrationTools {
         }
 
         // Check embeddings
+        //
+        // Die reine Datei-Existenz reicht nicht: eine angelegte, aber leere
+        // vectors.db meldete bisher "present", waehrend die semantische Suche
+        // mangels Zeilen nichts liefern konnte. Deshalb wird gezaehlt.
         const embeddingPath = path.join(dbPath, 'vectors.db');
         if (fs.existsSync(embeddingPath)) {
+            const rowCount = await this.countEmbeddings(embeddingPath);
             status.embeddings = {
                 exists: true,
-                path: embeddingPath
+                path: embeddingPath,
+                // null = Datei vorhanden, Zeilenzahl nicht ermittelbar (unknown,
+                // nicht "leer" und erst recht nicht "vorhanden").
+                count: rowCount,
+                populated: rowCount !== null && rowCount > 0
             };
         }
 
@@ -477,30 +486,21 @@ export class OrchestrationTools {
             });
         }
 
-        // Embeddings are OPTIONAL for basic navigation, but REQUIRED for semantic search.
-        // IMPORTANT: a vectors.db file existing does NOT mean embeddings are populated —
-        // the file is created when the V-dimension is opened, regardless of row count.
-        // Call `vector_backend_status` for the authoritative embedding count/backend state
-        // before relying on semantic_discovery.
-        const hasVoyageKey = typeof process.env.VOYAGE_API_KEY === 'string' && process.env.VOYAGE_API_KEY.length > 0;
-        const hasOpenAIKey = typeof process.env.OPENAI_API_KEY === 'string' && process.env.OPENAI_API_KEY.length > 0;
-        const hasAnthropicKey = typeof process.env.ANTHROPIC_API_KEY === 'string' && process.env.ANTHROPIC_API_KEY.length > 0;
+        // Embeddings are OPTIONAL for basic navigation, but improve semantic search quality.
         const embeddingGuidance = {
             optional: true,
             present: status.embeddings?.exists === true,
             message:
                 status.embeddings?.exists === true
-                    ? 'A vectors.db file exists, but this does NOT guarantee embeddings are populated. Call vector_backend_status for the authoritative embedding count before relying on semantic_discovery.'
-                    : 'No vectors.db found. Semantic search is unavailable until embeddings are generated (run an ingest with a working embedding provider).',
+                    ? 'Embeddings database file exists (semantic search should be available).'
+                    : 'Embeddings database file not found. Semantic search may be unavailable or degraded until embeddings are generated.',
             hints: [
-                'Embeddings use Voyage AI by default — set VOYAGE_API_KEY in the workspace .env.',
-                'A Voyage account without a billing method is throttled to ~3 req/min and 10K TPM, so bulk embedding fails with HTTP 429 and 0 embeddings are generated. Add a billing method (the free 200M tokens still apply) or switch provider.',
-                'On Windows the optimized sqlite-vss backend is unavailable; the system falls back to SQLite cosine similarity, which still requires populated embeddings.'
+                'Ensure OPENAI_API_KEY is set (commonly via a .env file in the workspace root).',
+                'On Windows, Semantic Brain may use ChromaDB; see CHROMADB_SETUP.md in the 5d-database-plugin for setup.'
             ],
             env: {
-                hasVoyageKey,
-                hasOpenAIKey,
-                hasAnthropicKey,
+                hasOpenAIKey: typeof process.env.OPENAI_API_KEY === 'string' && process.env.OPENAI_API_KEY.length > 0,
+                hasAnthropicKey: typeof process.env.ANTHROPIC_API_KEY === 'string' && process.env.ANTHROPIC_API_KEY.length > 0,
                 hasOpenAIModel: typeof process.env.OPENAI_MODEL === 'string' && process.env.OPENAI_MODEL.length > 0,
                 hasAnthropicModel: typeof process.env.ANTHROPIC_MODEL === 'string' && process.env.ANTHROPIC_MODEL.length > 0
             }
@@ -553,7 +553,16 @@ export class OrchestrationTools {
             const parts: string[] = [];
             parts.push(`docs: ${docsComplete ? 'ready' : (status.docs?.exists ? 'incomplete' : 'missing')}`);
             parts.push(`databases: ${databasesComplete ? 'ready' : (status.databases?.exists ? 'incomplete' : 'missing')}`);
-            parts.push(`embeddings: ${status.embeddings?.exists ? 'present (optional)' : 'missing (optional)'}`);
+            parts.push(`embeddings: ${(() => {
+                const emb = status.embeddings;
+                if (!emb?.exists) return 'missing (optional)';
+                // Datei da, aber ohne Zeilen: die semantische Suche ist damit
+                // funktionslos. Das als "present" zu melden war die Ursache des
+                // Widerspruchs zu vector_backend_status: { backend: "none" }.
+                if (emb.count === null || emb.count === undefined) return 'unknown (file exists, row count unavailable)';
+                if (emb.count === 0) return 'empty (file exists, 0 rows)';
+                return `present (${emb.count} rows, optional)`;
+            })()}`);
             const pluginOk =
                 status.plugins?.databasePlugin?.available === true &&
                 status.plugins?.documentationPlugin?.available === true;
@@ -1782,6 +1791,44 @@ export class OrchestrationTools {
      * Verifies plugin ID consistency between calculated value and database content.
      * Critical for foreign systems where plugin ID mismatches cause empty query results.
      */
+    /**
+     * Zählt die Zeilen in der embeddings-Tabelle von vectors.db.
+     *
+     * @returns Zeilenzahl, oder null wenn nicht ermittelbar.
+     *
+     * null heißt ausdrücklich "unbekannt", nicht "null Zeilen" und schon gar
+     * nicht "vorhanden". sqlite3 wird bewusst erst hier geladen: das native
+     * Modul fehlt auf manchen Systemen, und ein Statusbericht darf daran nicht
+     * scheitern.
+     */
+    private async countEmbeddings(embeddingPath: string): Promise<number | null> {
+        try {
+            const require = createRequire(import.meta.url);
+            const sqlite3Path = require.resolve('sqlite3', {
+                paths: [this.workspaceRoot, process.cwd()]
+            });
+            const sqlite3 = require(sqlite3Path);
+
+            return await new Promise<number | null>((resolve) => {
+                const db = new sqlite3.Database(embeddingPath, sqlite3.OPEN_READONLY, (openErr: any) => {
+                    if (openErr) {
+                        resolve(null);
+                        return;
+                    }
+                    db.get('SELECT COUNT(*) as count FROM embeddings', (err: any, row: any) => {
+                        db.close(() => {
+                            // Fehlende Tabelle ist kein "0": die Datei kann von
+                            // einer aelteren Schemaversion stammen.
+                            resolve(err ? null : (typeof row?.count === 'number' ? row.count : null));
+                        });
+                    });
+                });
+            });
+        } catch {
+            return null;
+        }
+    }
+
     private async verifyPluginId(calculatedPluginId: string, dbPath: string): Promise<any> {
         const pluginIdInfo: any = {
             calculated: calculatedPluginId,

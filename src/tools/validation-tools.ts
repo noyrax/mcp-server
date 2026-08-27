@@ -60,6 +60,7 @@ export class ValidationTools {
      */
     public async runDriftCheck(args: {
         since?: string;
+        modules?: Array<{ file_path: string; source_hash: string | null }>;
     } = {}): Promise<any> {
         // No longer requires plugin availability - uses local function
         return await this.adapter.runDriftCheck(args);

@@ -448,6 +448,7 @@ export class DocumentationPluginAdapter {
      */
     public async runDriftCheck(options: {
         since?: string;
+        modules?: Array<{ file_path: string; source_hash: string | null }>;
     } = {}): Promise<any> {
         if (!this.pluginPath) {
             throw new Error('Documentation System Plugin not found');
@@ -458,7 +459,8 @@ export class DocumentationPluginAdapter {
             // WICHTIG: docs/ muss im Workspace-Root sein (wird von Noyrax generiert)
             const result = await runDriftCheckLocal({
                 since: options.since,
-                workspaceRoot: this.workspaceRoot
+                workspaceRoot: this.workspaceRoot,
+                modules: options.modules
             });
             return result;
         } catch (error: any) {
