@@ -1,6 +1,6 @@
 {
   "name": "@noyrax/mcp-server",
-  "version": "1.0.4-beta.41",
+  "version": "1.0.4-beta.42",
   "description": "Unified MCP Server for Noyrax Workspace - Orchestrates 5D Database Plugin and Documentation System Plugin. Provides Model Context Protocol (MCP) access for AI agents (Cursor, VS Code, Claude Desktop).",
   "type": "module",
   "main": "./out/server.js",
@@ -19,8 +19,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/noyrax/noyrax.git",
-    "directory": "mcp-server"
+    "url": "git+https://github.com/noyrax/mcp-server.git"
   },
   "publishConfig": {
     "access": "public"
@@ -49,8 +48,8 @@
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.1",
-    "@noyrax/5d-database-plugin": "^0.1.14-beta.15",
-    "@noyrax/documentation-system-plugin": "^1.0.4-beta.14",
+    "@noyrax/5d-database-plugin": "^0.1.14-beta.17",
+    "@noyrax/documentation-system-plugin": "^1.0.4-beta.16",
     "dotenv": "^16.4.5",
     "zod": "^4.2.1"
   },
